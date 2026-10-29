@@ -77,6 +77,23 @@ test('runs DBSCAN and identifies noise points', () => {
   assert.equal(result.cluster_counts['-1'], 1)
 })
 
+test('runs agglomerative clustering and returns the requested groups', () => {
+  const data = parseCsv(groupedCsv)
+  const result = clusterData(data, 'agglomerative', ['x', 'y'], 2, 0.5, 2)
+  assert.equal(result.cluster_count, 2)
+  assert.equal(result.labels.length, data.info.rows)
+  assert.ok(result.cluster_counts['0'] > 0)
+  assert.ok(result.cluster_counts['1'] > 0)
+})
+
+test('runs deterministic K-Medoids and assigns each row to a representative', () => {
+  const data = parseCsv(groupedCsv)
+  const result = clusterData(data, 'kmedoids', ['x', 'y'], 2, 0.5, 2)
+  assert.equal(result.cluster_count, 2)
+  assert.equal(result.labels.length, data.info.rows)
+  assert.deepEqual(result.labels, clusterData(data, 'kmedoids', ['x', 'y'], 2, 0.5, 2).labels)
+})
+
 test('recognizes categorical columns and clusters them with a projected map', () => {
   const data = parseCsv('color,shape\nred,round\nred,round\nblue,square\nblue,square\n')
   assert.deepEqual(recommendedFeatures(data.info), ['color', 'shape'])
@@ -101,4 +118,11 @@ test('recognizes grocery item columns as a basket and uses those instead of a co
 test('rejects numeric features on datasets that exceed the browser limit', () => {
   const data = parseCsv(`x,y\n${Array.from({ length: 2501 }, (_, index) => `${index},${index}`).join('\n')}`)
   assert.throws(() => clusterData(data, 'dbscan', ['x', 'y'], 2, 0.5, 2), /up to 2,500 rows/)
+})
+
+test('enforces the local row limits for Agglomerative and K-Medoids', () => {
+  const agglomerativeData = parseCsv(`x,y\n${Array.from({ length: 501 }, (_, index) => `${index},${index}`).join('\n')}`)
+  assert.throws(() => clusterData(agglomerativeData, 'agglomerative', ['x', 'y'], 2, 0.5, 2), /up to 500 rows/)
+  const medoidsData = parseCsv(`x,y\n${Array.from({ length: 301 }, (_, index) => `${index},${index}`).join('\n')}`)
+  assert.throws(() => clusterData(medoidsData, 'kmedoids', ['x', 'y'], 2, 0.5, 2), /up to 300 rows/)
 })

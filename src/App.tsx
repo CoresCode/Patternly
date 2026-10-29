@@ -1,11 +1,19 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
-import { clusterData, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ParsedDataset } from './data'
+import { clusterData, MAX_AGGLOMERATIVE_ROWS, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, MAX_KMEDOIDS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ClusteringAlgorithm, type ParsedDataset } from './data'
 import { getSavedDataset, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
 import sampleCsv from './data/mini-flowers.csv?raw'
 import './style.css'
 
 const colors = ['#f29d62', '#89a997', '#769bc0', '#d47e82', '#a891c3', '#d5bd67', '#68b9b1']
+
+function algorithmName(algorithm: ClusteringAlgorithm): string {
+  return { kmeans: 'K-Means', dbscan: 'DBSCAN', agglomerative: 'Agglomerative', kmedoids: 'K-Medoids' }[algorithm]
+}
+
+function algorithmLimit(algorithm: ClusteringAlgorithm): number {
+  return { kmeans: MAX_KMEANS_ROWS, dbscan: MAX_DBSCAN_ROWS, agglomerative: MAX_AGGLOMERATIVE_ROWS, kmedoids: MAX_KMEDOIDS_ROWS }[algorithm]
+}
 
 function LibraryPage({ title, description, empty, children }: { title: string; description: string; empty: string; children: React.ReactNode }) {
   const items = Array.isArray(children) ? children : [children]
@@ -40,7 +48,23 @@ type ChartView = {
   dots: { x: number; y: number; xValue: number; yValue: number; label: number; row: number; edge: boolean }[]
 }
 
-function ClusterPlot({ result, chart, expanded, zoom, setZoom, onAxesChange }: { result: ClusterResult; chart: ChartView; expanded: boolean; zoom: number; setZoom: React.Dispatch<React.SetStateAction<number>>; onAxesChange: (axis: 'x' | 'y', name: string) => void }) {
+function ClusteringMethodPicker({ algorithm, onChange }: { algorithm: ClusteringAlgorithm; onChange: (algorithm: ClusteringAlgorithm) => void }) {
+  const [openInfo, setOpenInfo] = useState<ClusteringAlgorithm | null>(null)
+  const methods = [
+    { id: 'kmeans' as const, glyph: 'K', title: 'K-Means', short: 'Choose how many groups', info: 'K-Means splits rows into the number of groups you choose. It assigns every row to a group and works best for compact groups.' },
+    { id: 'dbscan' as const, glyph: 'D', title: 'DBSCAN', short: 'Find dense groups & outliers', info: 'DBSCAN finds dense groups using the radius and minimum-points settings. Rows that do not fit a dense group are marked as noise.' },
+    { id: 'agglomerative' as const, glyph: 'A', title: 'Agglomerative', short: 'Build a hierarchy of groups', info: 'Ward Agglomerative starts with individual rows and joins groups to keep within-group spread small. Choose how many groups to keep.' },
+  ]
+  return <div className="method-picker"><div className="method-tabs">{methods.map(method => <div className="method-option" key={method.id}><button className={algorithm === method.id ? 'selected' : ''} onClick={() => onChange(method.id)}><span className={`method-glyph ${method.id}`}>{method.glyph}</span><span><strong>{method.title}</strong><small>{method.short}</small></span>{algorithm === method.id && <Check size={16}/>}</button><button type="button" className="info-tip" aria-label={`About ${method.title}`} title={method.info} aria-expanded={openInfo === method.id} data-open={openInfo === method.id} data-tooltip={method.info} onClick={() => setOpenInfo(current => current === method.id ? null : method.id)}><Info size={14}/></button></div>)}</div><label className="more-methods"><span>MORE METHODS</span><select aria-label="More clustering methods" title="K-Medoids chooses actual rows as group representatives and supports up to 300 rows." value={algorithm === 'kmedoids' ? 'kmedoids' : ''} onChange={event => { if (event.target.value) onChange(event.target.value as ClusteringAlgorithm) }}><option value="">Choose another method…</option><option value="kmedoids">K-Medoids · representative rows</option></select></label>{algorithm === 'kmedoids' && <small className="method-limit-hint">K-Medoids uses actual rows as group centers · up to 300 rows</small>}</div>
+}
+
+function ClusterPlot({ result, chart, expanded, zoom, setZoom, onAxesChange, chartType }: { result: ClusterResult; chart: ChartView | null; expanded: boolean; zoom: number; setZoom: React.Dispatch<React.SetStateAction<number>>; onAxesChange: (axis: 'x' | 'y', name: string) => void; chartType: 'map' | 'sizes' }) {
+  if (chartType === 'sizes') {
+    const entries = Object.entries(result.cluster_counts).sort((a, b) => Number(a[0]) - Number(b[0]))
+    const largest = Math.max(1, ...entries.map(([, count]) => count))
+    return <><div className="chart-guide"><span className="guide-dot">i</span><span><strong>Each bar is one group</strong> · Longer bars contain more rows. {result.noise_count ? 'Noise rows did not meet DBSCAN’s density settings.' : 'Cluster sizes show how evenly the rows were divided.'}</span></div><div className={`cluster-size-chart ${expanded ? 'expanded' : ''}`}>{entries.map(([label, count]) => { const title = label === '-1' ? 'Noise' : `Cluster ${Number(label) + 1}`; const details = result.cluster_summaries?.[label] ?? []; const tooltip = `${title}: ${count.toLocaleString()} rows${details.length ? `\n${details.join('\n')}` : ''}`; return <div className="cluster-size-row" key={label} title={tooltip}><div className="size-label"><i style={{ background: label === '-1' ? '#a6aaa5' : colors[Number(label) % colors.length] }}/><strong>{title}</strong><span>{count.toLocaleString()} rows · {Math.round(count / result.labels.length * 100)}%</span></div><div className="size-track"><span style={{ width: `${count / largest * 100}%`, background: label === '-1' ? '#a6aaa5' : colors[Number(label) % colors.length] }}/></div></div>})}</div></>
+  }
+  if (!chart) return <div className="one-feature"><BarChart3 size={18}/> This dataset has fewer than two map dimensions. Switch the chart view to “Cluster sizes”.</div>
   const projected = chart.xName.startsWith('Pattern summary')
   const adjustZoom = (factor: number) => setZoom(current => Math.max(1, Math.min(8, Number((current * factor).toFixed(2)))))
   const clippedX = chart.xDomain.below + chart.xDomain.above
@@ -52,7 +76,7 @@ function ClusterPlot({ result, chart, expanded, zoom, setZoom, onAxesChange }: {
     ? ` To keep extreme values from flattening the main pattern, the chart focuses on the middle 96% per axis; ${clippedX} rows are pinned to the x-axis edges and ${clippedY} to the y-axis edges. Hover edge dots for exact values.`
     : ''
   return <>
-    <div className="chart-guide"><span className="guide-dot">i</span><span><strong>Each dot is one row</strong> · Colors show the groups found by {result.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}. {axisExplain}{clippedExplain}</span></div>
+    <div className="chart-guide"><span className="guide-dot">i</span><span><strong>Each dot is one row</strong> · Colors show the groups found by {algorithmName(result.algorithm)}. {axisExplain}{clippedExplain}</span></div>
     {chart.axisChoices.length > 2 && <div className="axis-selectors"><span className="axis-select-title">SHOW ON MAP</span><label>X <select aria-label="Horizontal chart axis" value={chart.xName} onChange={event => onAxesChange('x', event.target.value)}>{chart.axisChoices.map(name => <option key={name} value={name} disabled={name === chart.yName}>{name}</option>)}</select></label><label>Y <select aria-label="Vertical chart axis" value={chart.yName} onChange={event => onAxesChange('y', event.target.value)}>{chart.axisChoices.map(name => <option key={name} value={name} disabled={name === chart.xName}>{name}</option>)}</select></label></div>}
     <div className={`chart-area ${expanded ? 'expanded' : ''}`}>
       <svg viewBox="0 0 560 300" role="img" aria-label="Interactive scatter plot of clustered rows" onWheel={event => { event.preventDefault(); adjustZoom(event.deltaY < 0 ? 1.2 : 1 / 1.2) }}>
@@ -72,17 +96,17 @@ function App() {
   const [dataset, setDataset] = useState<ParsedDataset | null>(null)
   const [result, setResult] = useState<ClusterResult | null>(null)
   const [runs, setRuns] = useState<ClusterResult[]>([])
-  const [algorithm, setAlgorithm] = useState<'kmeans' | 'dbscan'>('kmeans')
+  const [algorithm, setAlgorithm] = useState<ClusteringAlgorithm>('kmeans')
   const [features, setFeatures] = useState<string[]>([])
   const [clusterCount, setClusterCount] = useState(3)
   const [eps, setEps] = useState(0.5)
   const [minSamples, setMinSamples] = useState(5)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [methodInfo, setMethodInfo] = useState<'kmeans' | 'dbscan' | null>(null)
   const [dragging, setDragging] = useState(false)
   const [chartExpanded, setChartExpanded] = useState(false)
   const [chartZoom, setChartZoom] = useState(1)
+  const [chartType, setChartType] = useState<'map' | 'sizes'>('map')
   const [axisOverride, setAxisOverride] = useState<[string, string] | null>(null)
   const [page, setPage] = useState<'studio' | 'datasets' | 'experiments'>('studio')
   const [datasetId, setDatasetId] = useState('')
@@ -104,7 +128,7 @@ function App() {
       const saved = await getSavedDataset(id)
       if (!saved) throw new Error('This saved dataset is no longer available in this browser.')
       const parsed = parseCsv(saved.csvText, saved.name)
-      setDataset(parsed); setDatasetId(saved.id); setFeatures(recommendedFeatures(parsed.info)); setResult(null); setAxisOverride(null); setChartZoom(1); setError(''); setPage('studio')
+      setDataset(parsed); setDatasetId(saved.id); setFeatures(recommendedFeatures(parsed.info)); setResult(null); setAxisOverride(null); setChartZoom(1); setChartType('map'); setError(''); setPage('studio')
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not open dataset.'); setPage('studio') }
   }
 
@@ -119,6 +143,7 @@ function App() {
     try {
       const parsed = await readCsvFile(next)
       setDataset(parsed); setDatasetId('')
+      setChartType('map')
       setFeatures(recommendedFeatures(parsed.info))
       try {
         const saved = makeSavedDataset(parsed.info, parsed.sourceText)
@@ -170,7 +195,7 @@ function App() {
     const currentY = chart?.yName ?? result?.plot_features?.[1] ?? name
     setAxisOverride(axis === 'x' ? [name, currentY] : [currentX, name]); setChartZoom(1)
   }
-  const plot = (expanded = false) => chart ? <ClusterPlot result={result!} chart={chart} expanded={expanded} zoom={chartZoom} setZoom={setChartZoom} onAxesChange={changeAxis}/> : <div className="one-feature"><BarChart3 size={18}/> A map needs at least two usable dimensions. Try selecting more categorical features.</div>
+  const plot = (expanded = false) => <ClusterPlot result={result!} chart={chart} expanded={expanded} zoom={chartZoom} setZoom={setChartZoom} onAxesChange={changeAxis} chartType={chartType}/>
 
   function toggleFeature(name: string) { setFeatures(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]) }
 
@@ -182,13 +207,13 @@ function App() {
       <button className={`nav-item ${page === 'datasets' ? 'active' : ''}`} onClick={() => setPage('datasets')}><Database size={17}/> Datasets</button>
       <button className={`nav-item ${page === 'experiments' ? 'active' : ''}`} onClick={() => setPage('experiments')}><FlaskConical size={17}/> Experiments</button>
       <div className="side-divider"/><div className="side-caption">RECENT EXPERIMENTS</div>
-      {savedExperiments.length ? savedExperiments.slice(0, 5).map((item, index) => <button className="recent" key={item.id} onClick={() => void openExperiment(item)}><span className="recent-dot" style={{background: colors[index % colors.length]}}/>{item.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'} <span>{item.result.cluster_count} groups</span></button>) : <div className="empty-recent">Your saved experiments<br/>will appear here.</div>}
+      {savedExperiments.length ? savedExperiments.slice(0, 5).map((item, index) => <button className="recent" key={item.id} onClick={() => void openExperiment(item)}><span className="recent-dot" style={{background: colors[index % colors.length]}}/>{algorithmName(item.algorithm)} <span>{item.result.cluster_count} groups</span></button>) : <div className="empty-recent">Your saved experiments<br/>will appear here.</div>}
       <div className="sidebar-bottom"><button className="nav-item"><CircleHelp size={17}/> Help & guides</button><div className="profile"><div className="avatar">P</div><div><strong>Personal workspace</strong><small>Free plan</small></div><ChevronDown size={15}/></div></div>
     </aside>
 
     <main className="main-area">
       <header className="topbar"><div className="crumb">Workspace <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button" aria-label="Help"><CircleHelp size={17}/></button><div className="avatar small">P</div></div></header>
-      {page === 'datasets' ? <LibraryPage title="Your datasets" description="Every CSV you add is saved in this browser, with its past clustering reports." empty="Upload a CSV in Studio to start your library.">{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${latest.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Each run keeps its settings, cluster assignments, map, and summary for review." empty="Run clustering in Studio to create your first report.">{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{item.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button></article>)}</LibraryPage> : <div className="content">
+      {page === 'datasets' ? <LibraryPage title="Your datasets" description="Every CSV you add is saved in this browser, with its past clustering reports." empty="Upload a CSV in Studio to start your library.">{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${algorithmName(latest.algorithm)}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Each run keeps its settings, cluster assignments, map, and summary for review." empty="Run clustering in Studio to create your first report.">{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{algorithmName(item.algorithm)}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button></article>)}</LibraryPage> : <div className="content">
         <div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> DATA EXPLORATION</div><h1>Find the shape in your data.</h1><p>Bring a dataset, try a clustering method, and see what patterns emerge.</p></div><button className="quiet-button" onClick={() => { setDataset(null); setResult(null); setAxisOverride(null); setChartZoom(1); setRuns([]); setError(''); setChartExpanded(false) }}><Plus size={16}/> New exploration</button></div>
         <div className="layout-grid">
           <section className="left-column">
@@ -197,7 +222,7 @@ function App() {
               <input type="file" accept=".csv,text/csv" onChange={event => { void selectFile(event.target.files?.[0]); event.currentTarget.value = '' }}/><div className="upload-icon"><UploadCloud size={21}/></div><strong>{busy ? 'Reading your dataset...' : 'Drop your CSV here, or browse'}</strong><span>CSV only · up to {MAX_FILE_BYTES / 1024 / 1024} MB · processed in your browser</span><span className="browse-link">Choose a file <ArrowDownToLine size={13}/></span>
             </label> : <div className="dataset-card"><div className="file-icon"><FileSpreadsheet size={18}/></div><div className="dataset-name"><strong>{dataset.info.filename}</strong><span>{dataset.info.rows.toLocaleString()} rows <i/> {dataset.info.columns} columns</span></div><button className="remove-file" onClick={() => {setDataset(null); setResult(null)}} aria-label="Remove dataset"><X size={16}/></button><div className="dataset-stats"><div><span>ROWS</span><strong>{dataset.info.rows.toLocaleString()}</strong></div><div><span>FEATURES</span><strong>{dataset.info.columns}</strong></div><div><span>USABLE</span><strong>{clusterableColumns.length}</strong></div></div></div>}
             {dataset && <div className="preview-card"><div className="card-heading"><div><h3>Quick preview</h3><span>First 12 rows · {dataset.info.column_info.length} columns detected</span></div><span className="text-button">Processed locally <Check size={13}/></span></div><div className="table-wrap"><table><thead><tr>{previewColumns.map(col => <th key={col.name}>{col.name}<small>{col.type}</small></th>)}</tr></thead><tbody>{dataset.info.preview.map((row, index) => <tr key={index}>{previewColumns.map(col => <td key={col.name}>{row[col.name] === '' ? <em>empty</em> : String(row[col.name])}</td>)}</tr>)}</tbody></table></div></div>}
-            {dataset && result && <div className="result-card"><div className="card-heading"><div><h3>Cluster map</h3><span>{chart ? `${chart.xName} × ${chart.yName}` : result.features.join(', ')} · {result.labels.length.toLocaleString()} records</span></div><div className="visual-actions">{chart && <button className="icon-button expand-button" aria-label="Expand visualization" title="Expand visualization" onClick={() => setChartExpanded(true)}><Maximize2 size={15}/></button>}<button className="export-button"><ArrowDownToLine size={14}/> Export</button></div></div>
+            {dataset && result && <div className="result-card"><div className="card-heading"><div><h3>{chartType === 'map' ? 'Cluster map' : 'Cluster sizes'}</h3><span>{chartType === 'map' && chart ? `${chart.xName} × ${chart.yName} · ` : ''}{result.labels.length.toLocaleString()} rows · {algorithmName(result.algorithm)}</span></div><div className="visual-actions"><label className="chart-type-select"><span>VIEW</span><select aria-label="Chart visualization" value={chartType} onChange={event => setChartType(event.target.value as 'map' | 'sizes')}><option value="map">Cluster map</option><option value="sizes">Cluster sizes</option></select></label><button className="icon-button expand-button" aria-label="Expand visualization" title="Expand visualization" onClick={() => setChartExpanded(true)}><Maximize2 size={15}/></button><button className="export-button"><ArrowDownToLine size={14}/> Export</button></div></div>
               {plot()}
               <ClusterLegend result={result}/>
             </div>}
@@ -205,15 +230,15 @@ function App() {
           </section>
 
           <section className="right-column"><div className="section-title"><span className="step">02</span><div><h2>Experiment</h2><p>Choose how to group your data.</p></div></div>
-            <div className="experiment-card"><label className="field-label">CLUSTERING METHOD</label><div className="method-tabs"><div className="method-option"><button className={algorithm === 'kmeans' ? 'selected' : ''} onClick={() => setAlgorithm('kmeans')}><span className="method-glyph">K</span><span><strong>K-Means</strong><small>Find a set number of groups</small></span>{algorithm === 'kmeans' && <Check size={16}/>}</button><button type="button" className="info-tip" aria-label="About K-Means" title="K-Means groups rows into the number you choose; it assigns every row to a group." aria-expanded={methodInfo === 'kmeans'} data-open={methodInfo === 'kmeans'} data-tooltip="K-Means splits rows into the number of groups you choose. It works best when you expect compact groups and want every row assigned." onClick={() => setMethodInfo(current => current === 'kmeans' ? null : 'kmeans')}><Info size={14}/></button></div><div className="method-option"><button className={algorithm === 'dbscan' ? 'selected' : ''} onClick={() => setAlgorithm('dbscan')}><span className="method-glyph db">D</span><span><strong>DBSCAN</strong><small>Find dense regions & outliers</small></span>{algorithm === 'dbscan' && <Check size={16}/>}</button><button type="button" className="info-tip" aria-label="About DBSCAN" title="DBSCAN finds dense groups and marks rows that do not fit as noise." aria-expanded={methodInfo === 'dbscan'} data-open={methodInfo === 'dbscan'} data-tooltip="DBSCAN finds groups of nearby rows using the radius and minimum-points settings. Rows that do not fit a dense group are marked as noise." onClick={() => setMethodInfo(current => current === 'dbscan' ? null : 'dbscan')}><Info size={14}/></button></div></div>
-              {algorithm === 'kmeans' && <div className="control-block"><div className="control-row"><label htmlFor="count">Number of clusters</label><span className="value-pill">{clusterCount}</span></div><input id="count" className="range" type="range" min="2" max="10" value={clusterCount} onChange={event => setClusterCount(Number(event.target.value))}/><div className="range-hints"><span>2 groups</span><span>10 groups</span></div></div>}
+            <div className="experiment-card"><label className="field-label">CLUSTERING METHOD</label><ClusteringMethodPicker algorithm={algorithm} onChange={setAlgorithm}/>
+              {algorithm !== 'dbscan' && <div className="control-block"><div className="control-row"><label htmlFor="count">Number of clusters</label><span className="value-pill">{clusterCount}</span></div><input id="count" className="range" type="range" min="2" max="10" value={clusterCount} onChange={event => setClusterCount(Number(event.target.value))}/><div className="range-hints"><span>2 groups</span><span>10 groups</span></div></div>}
               {algorithm === 'dbscan' && <div className="db-controls"><div className="control-row"><label htmlFor="eps">Neighborhood radius (eps)</label><span className="value-pill">{eps.toFixed(1)}</span></div><input id="eps" className="range" type="range" min="0.1" max="2" step="0.1" value={eps} onChange={event => setEps(Number(event.target.value))}/><div className="range-hints"><span>0.1</span><span>2.0</span></div><div className="control-row min-samples"><label htmlFor="min-samples">Minimum points</label><span className="value-pill">{minSamples}</span></div><input id="min-samples" className="range" type="range" min="2" max="15" value={minSamples} onChange={event => setMinSamples(Number(event.target.value))}/></div>}
               <div className="control-block feature-block"><div className="control-row"><label>Features to include</label><span className="feature-count">{features.length} selected</span></div>{clusterableColumns.length ? clusterableColumns.map(column=><label className="check-row" key={column.name}><input type="checkbox" checked={features.includes(column.name)} onChange={()=>toggleFeature(column.name)}/><span>{column.name}</span><small>{column.basket ? 'item' : column.type}</small></label>) : <div className="feature-empty">Upload a CSV to choose numeric or categorical features.</div>}</div>
-              <button className="run-button" onClick={() => void run()} disabled={!dataset || features.length === 0 || busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <Play size={15} fill="currentColor"/>}{busy ? 'Working...' : 'Run clustering'}<ArrowUpRight size={15}/></button><p className="run-footnote">Runs in your browser · K-Means up to {MAX_KMEANS_ROWS.toLocaleString()} rows · DBSCAN up to {MAX_DBSCAN_ROWS.toLocaleString()} rows.</p>
+              <button className="run-button" onClick={() => void run()} disabled={!dataset || features.length === 0 || busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <Play size={15} fill="currentColor"/>}{busy ? 'Working...' : 'Run clustering'}<ArrowUpRight size={15}/></button><p className="run-footnote">{algorithmName(algorithm)} · Runs locally · up to {algorithmLimit(algorithm).toLocaleString()} rows</p>
             </div>
             {error && <div className="error-banner">{error}</div>}
             <div className="insight-card"><div className="insight-icon"><Sparkles size={16}/></div><div><strong>A good place to start</strong><p>Patternly scales numeric features, caps extreme values so a few outliers do not dominate the groups, and encodes categories locally. Detected item columns are treated as shopping baskets.</p></div></div>
-            {runs.length > 1 && <div className="compare-card"><div className="compare-heading"><div><h3>Compare runs</h3><span>Recent experiments in this session</span></div><button className="text-button">Clear</button></div>{runs.map((item,index)=><div className="compare-row" key={index}><span className="compare-color" style={{background:colors[index]}}/><strong>{item.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}</strong><span>{item.cluster_count} clusters</span><b>{item.labels.length} rows</b></div>)}</div>}
+            {runs.length > 1 && <div className="compare-card"><div className="compare-heading"><div><h3>Compare runs</h3><span>Recent experiments in this session</span></div><button className="text-button">Clear</button></div>{runs.map((item,index)=><div className="compare-row" key={index}><span className="compare-color" style={{background:colors[index]}}/><strong>{algorithmName(item.algorithm)}</strong><span>{item.cluster_count} clusters</span><b>{item.labels.length} rows</b></div>)}</div>}
             <div className="coming-soon"><div><span className="coming-icon">P</span><span><strong>More ways to explore</strong><small>PCA & outlier detection are on the way</small></span></div><span className="soon-pill">COMING SOON</span></div>
           </section>
         </div>
@@ -221,7 +246,7 @@ function App() {
         <footer className="footer"><span>Patternly <i/> A little more clarity in every dataset.</span><span>Built for curious minds <Sparkles size={12}/></span></footer>
       </div>}
     </main>
-    {chartExpanded && result && <div className="modal-backdrop" onMouseDown={() => setChartExpanded(false)}><section className="chart-modal" role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><h2 id="expanded-chart-title">Cluster map</h2><span>{chart ? `${chart.xName} vs ${chart.yName}` : result.features.join(', ')} · {result.labels.length.toLocaleString()} records</span></div><button className="icon-button" aria-label="Close expanded visualization" onClick={() => setChartExpanded(false)}><X size={18}/></button></div>{plot(true)}<ClusterLegend result={result}/></section></div>}
+    {chartExpanded && result && <div className="modal-backdrop" onMouseDown={() => setChartExpanded(false)}><section className="chart-modal" role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><h2 id="expanded-chart-title">{chartType === 'map' ? 'Cluster map' : 'Cluster sizes'}</h2><span>{chartType === 'map' && chart ? `${chart.xName} vs ${chart.yName} · ` : ''}{result.labels.length.toLocaleString()} rows · {algorithmName(result.algorithm)}</span></div><button className="icon-button" aria-label="Close expanded visualization" onClick={() => setChartExpanded(false)}><X size={18}/></button></div>{plot(true)}<ClusterLegend result={result}/></section></div>}
   </div>
 }
 

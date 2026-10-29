@@ -22,8 +22,10 @@ export type ParsedDataset = {
   sourceText: string
 }
 
+export type ClusteringAlgorithm = 'kmeans' | 'dbscan' | 'agglomerative' | 'kmedoids'
+
 export type ClusterResult = {
-  algorithm: string
+  algorithm: ClusteringAlgorithm
   features: string[]
   labels: number[]
   cluster_counts: Record<string, number>
@@ -38,6 +40,8 @@ export type ClusterResult = {
 export const MAX_FILE_BYTES = 25 * 1024 * 1024
 export const MAX_KMEANS_ROWS = 10_000
 export const MAX_DBSCAN_ROWS = 2_500
+export const MAX_AGGLOMERATIVE_ROWS = 500
+export const MAX_KMEDOIDS_ROWS = 300
 export const MAX_ENCODED_FEATURES = 1_500
 
 export function parseCsv(text: string, filename = 'dataset.csv'): ParsedDataset {
@@ -232,27 +236,32 @@ function clipNumericTails(values: number[]): number[] {
 
 export function clusterData(
   dataset: ParsedDataset,
-  algorithm: 'kmeans' | 'dbscan',
+  algorithm: ClusteringAlgorithm,
   features: string[],
   clusterCount: number,
   eps: number,
   minSamples: number,
 ): ClusterResult {
-  const limit = algorithm === 'dbscan' ? MAX_DBSCAN_ROWS : MAX_KMEANS_ROWS
+  const limits: Record<ClusteringAlgorithm, number> = { kmeans: MAX_KMEANS_ROWS, dbscan: MAX_DBSCAN_ROWS, agglomerative: MAX_AGGLOMERATIVE_ROWS, kmedoids: MAX_KMEDOIDS_ROWS }
+  const limit = limits[algorithm]
   if (dataset.records.length > limit) {
-    throw new Error(`${algorithm === 'dbscan' ? 'DBSCAN' : 'K-Means'} supports up to ${limit.toLocaleString()} rows in this browser. Narrow the CSV and try again.`)
+    const names: Record<ClusteringAlgorithm, string> = { kmeans: 'K-Means', dbscan: 'DBSCAN', agglomerative: 'Agglomerative clustering', kmedoids: 'K-Medoids' }
+    throw new Error(`${names[algorithm]} supports up to ${limit.toLocaleString()} rows in this browser. Narrow the CSV or choose another method.`)
   }
   const matrix = numericMatrix(dataset, features)
   const scaled = matrix.values
   let labels: number[]
   let inertia: number | null = null
-  if (algorithm === 'kmeans') {
+  if (algorithm !== 'dbscan') {
     if (!Number.isInteger(clusterCount) || clusterCount < 2 || clusterCount > scaled.length) {
       throw new Error(`Choose between 2 and ${scaled.length} clusters for this dataset.`)
     }
-    const result = runKMeans(scaled, clusterCount)
-    labels = result.labels
-    inertia = result.inertia
+    if (algorithm === 'kmeans') {
+      const result = runKMeans(scaled, clusterCount)
+      labels = result.labels
+      inertia = result.inertia
+    } else if (algorithm === 'agglomerative') labels = runAgglomerative(scaled, clusterCount)
+    else labels = runKMedoids(scaled, clusterCount)
   } else {
     if (!Number.isFinite(eps) || eps <= 0) throw new Error('DBSCAN radius must be greater than zero.')
     if (!Number.isInteger(minSamples) || minSamples < 2) throw new Error('DBSCAN minimum points must be at least 2.')
@@ -427,6 +436,130 @@ function runKMeans(points: number[][], k: number): { labels: number[]; inertia: 
   }
   const inertia = points.reduce((sum, point, index) => sum + squaredDistance(point, centroids[labels[index]]), 0)
   return { labels, inertia }
+}
+
+function runAgglomerative(points: number[][], targetClusters: number): number[] {
+  const rowCount = points.length
+  const capacity = rowCount * 2
+  const distances = new Float64Array(capacity * capacity)
+  const sizes = new Int32Array(capacity)
+  const left = new Int32Array(capacity).fill(-1)
+  const right = new Int32Array(capacity).fill(-1)
+  let active = Array.from({ length: rowCount }, (_, index) => index)
+  for (let row = 0; row < rowCount; row += 1) {
+    sizes[row] = 1
+    for (let column = row + 1; column < rowCount; column += 1) {
+      const distance = squaredDistance(points[row], points[column])
+      distances[row * capacity + column] = distance
+      distances[column * capacity + row] = distance
+    }
+  }
+
+  let nextCluster = rowCount
+  while (active.length > targetClusters) {
+    let bestDistance = Number.POSITIVE_INFINITY
+    let mergeA = -1, mergeB = -1
+    for (let first = 0; first < active.length; first += 1) {
+      const a = active[first]
+      for (let second = first + 1; second < active.length; second += 1) {
+        const b = active[second]
+        const distance = distances[a * capacity + b]
+        if (distance < bestDistance) { bestDistance = distance; mergeA = a; mergeB = b }
+      }
+    }
+    if (mergeA < 0 || mergeB < 0) break
+    const merged = nextCluster++
+    left[merged] = mergeA; right[merged] = mergeB
+    sizes[merged] = sizes[mergeA] + sizes[mergeB]
+    for (const other of active) {
+      if (other === mergeA || other === mergeB) continue
+      const sizeA = sizes[mergeA], sizeB = sizes[mergeB], sizeOther = sizes[other]
+      const distanceAC = distances[mergeA * capacity + other]
+      const distanceBC = distances[mergeB * capacity + other]
+      const mergedDistance = Math.max(0, ((sizeA + sizeOther) * distanceAC + (sizeB + sizeOther) * distanceBC - sizeOther * bestDistance) / (sizeA + sizeB + sizeOther))
+      distances[merged * capacity + other] = mergedDistance
+      distances[other * capacity + merged] = mergedDistance
+    }
+    active = active.filter(cluster => cluster !== mergeA && cluster !== mergeB)
+    active.push(merged)
+  }
+
+  const labels = new Array<number>(rowCount).fill(-1)
+  active.forEach((root, label) => {
+    const pending = [root]
+    while (pending.length) {
+      const current = pending.pop()!
+      if (left[current] < 0) labels[current] = label
+      else { pending.push(left[current], right[current]) }
+    }
+  })
+  return labels
+}
+
+function runKMedoids(points: number[][], k: number): number[] {
+  const count = points.length
+  const distances = new Float64Array(count * count)
+  for (let row = 0; row < count; row += 1) {
+    for (let column = row + 1; column < count; column += 1) {
+      const distance = Math.sqrt(squaredDistance(points[row], points[column]))
+      distances[row * count + column] = distance
+      distances[column * count + row] = distance
+    }
+  }
+
+  const medoids = [0]
+  while (medoids.length < k) {
+    let farthest = -1, farthestDistance = -1
+    for (let row = 0; row < count; row += 1) {
+      if (medoids.includes(row)) continue
+      const nearest = Math.min(...medoids.map(medoid => distances[row * count + medoid]))
+      if (nearest > farthestDistance) { farthest = row; farthestDistance = nearest }
+    }
+    if (farthest < 0) break
+    medoids.push(farthest)
+  }
+
+  let labels = new Array<number>(count).fill(-1)
+  for (let iteration = 0; iteration < 30; iteration += 1) {
+    let changed = false
+    for (let row = 0; row < count; row += 1) {
+      let nearest = 0
+      for (let cluster = 1; cluster < medoids.length; cluster += 1) {
+        if (distances[row * count + medoids[cluster]] < distances[row * count + medoids[nearest]]) nearest = cluster
+      }
+      labels[row] = nearest
+    }
+    const groups = Array.from({ length: medoids.length }, () => [] as number[])
+    labels.forEach((label, row) => groups[label].push(row))
+    for (let cluster = 0; cluster < groups.length; cluster += 1) {
+      const members = groups[cluster]
+      if (members.length === 0) {
+        let farthest = 0, farthestDistance = -1
+        for (let row = 0; row < count; row += 1) {
+          const nearest = Math.min(...medoids.map(medoid => distances[row * count + medoid]))
+          if (nearest > farthestDistance && !medoids.includes(row)) { farthest = row; farthestDistance = nearest }
+        }
+        if (medoids[cluster] !== farthest) { medoids[cluster] = farthest; changed = true }
+        continue
+      }
+      let best = medoids[cluster], bestCost = Number.POSITIVE_INFINITY
+      for (const candidate of members) {
+        let cost = 0
+        for (const member of members) cost += distances[candidate * count + member]
+        if (cost < bestCost) { best = candidate; bestCost = cost }
+      }
+      if (medoids[cluster] !== best) { medoids[cluster] = best; changed = true }
+    }
+    if (!changed) break
+  }
+  for (let row = 0; row < count; row += 1) {
+    let nearest = 0
+    for (let cluster = 1; cluster < medoids.length; cluster += 1) {
+      if (distances[row * count + medoids[cluster]] < distances[row * count + medoids[nearest]]) nearest = cluster
+    }
+    labels[row] = nearest
+  }
+  return labels
 }
 
 function runDbscan(points: number[][], eps: number, minSamples: number): number[] {

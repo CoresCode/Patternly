@@ -1,4 +1,4 @@
-﻿import type { ClusterResult, DatasetInfo } from './data'
+import type { ClusterResult, ClusteringAlgorithm, DatasetInfo } from './data'
 
 export type SavedDataset = {
   id: string
@@ -15,7 +15,7 @@ export type SavedExperiment = {
   datasetId: string
   datasetName: string
   createdAt: number
-  algorithm: 'kmeans' | 'dbscan'
+  algorithm: ClusteringAlgorithm
   features: string[]
   clusterCountRequested: number
   eps: number
