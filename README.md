@@ -27,7 +27,7 @@ The bundled mini flower sample is included in the frontend build. Clicking it do
 
 ## Clustering
 
-Patternly fills missing numeric values with the column median, encodes categories, standardizes selected features, and runs deterministic K-Means or DBSCAN locally. When selected data has at least two numeric columns, the map plots those directly; otherwise it projects the encoded data into two dimensions for display. The Datasets page saves each uploaded CSV in browser storage, and the Experiments page keeps each run's settings, assignments, and report on that device.
+Patternly fills missing numeric values with the column median, caps extreme numeric tails at the 2nd/98th percentile for clustering on datasets with at least 100 rows, encodes categories, standardizes selected features, and runs deterministic K-Means or DBSCAN locally. When selected data has at least two numeric columns, the map plots those directly; otherwise it projects the encoded data into two dimensions for display. Plot axes also focus on the middle 96% and pin extreme values to the edges; hover a dot to see its original values. The chart includes zoom buttons and mouse-wheel zoom. The Datasets page saves each uploaded CSV in browser storage, and the Experiments page keeps each run's settings, assignments, and report on that device.
 
 ## Tests
 

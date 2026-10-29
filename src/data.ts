@@ -186,7 +186,7 @@ function numericMatrix(dataset: ParsedDataset, features: string[]): EncodedMatri
     const filled = columnValues.map(value => Number.isFinite(value) ? value : median)
     numericValues.forEach((row, index) => row.push(filled[index]))
     featureNames.push(feature)
-    filled.forEach((value, index) => values[index].push(value))
+    clipNumericTails(filled).forEach((value, index) => values[index].push(value))
   }
 
   for (const feature of categoryFeatures) {
@@ -220,6 +220,14 @@ function numericMatrix(dataset: ParsedDataset, features: string[]): EncodedMatri
   })
   const scaled = values.map(row => row.map((value, column) => (value - means[column]) / scales[column]))
   return { values: scaled, featureNames, numericValues, numericNames: numericFeatures }
+}
+
+function clipNumericTails(values: number[]): number[] {
+  if (values.length < 100) return values
+  const sorted = [...values].sort((left, right) => left - right)
+  const at = (percentile: number) => sorted[Math.floor((sorted.length - 1) * percentile)]
+  const low = at(0.02), high = at(0.98)
+  return values.map(value => Math.max(low, Math.min(high, value)))
 }
 
 export function clusterData(

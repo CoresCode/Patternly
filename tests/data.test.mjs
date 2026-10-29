@@ -53,6 +53,15 @@ test('runs deterministic K-Means and returns assignments for every row', () => {
   assert.deepEqual(result.labels, clusterData(data, 'kmeans', ['x', 'y'], 2, 0.5, 2).labels)
 })
 
+test('caps a few extreme numeric values so they do not dominate K-Means', () => {
+  const rows = [...Array(49).fill('0,0'), ...Array(50).fill('1,1'), '1000000000,1000000000']
+  const data = parseCsv(`x,y\n${rows.join('\n')}`)
+  const result = clusterData(data, 'kmeans', ['x', 'y'], 2, 0.5, 2)
+  const counts = Object.values(result.cluster_counts).sort((a, b) => a - b)
+  assert.equal(result.cluster_count, 2)
+  assert.ok(counts[1] - counts[0] <= 2)
+})
+
 test('runs DBSCAN and identifies noise points', () => {
   const data = parseCsv('x,y\n0,0\n0.1,0.1\n10,10\n10.1,9.9\n50,50\n')
   const result = clusterData(data, 'dbscan', ['x', 'y'], 2, 0.2, 2)

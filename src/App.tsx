@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, Sparkles, UploadCloud, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Minus, Play, Plus, RotateCcw, Sparkles, UploadCloud, X } from 'lucide-react'
 import { clusterData, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ParsedDataset } from './data'
 import { getSavedDataset, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
 import sampleCsv from './data/mini-flowers.csv?raw'
@@ -19,6 +19,52 @@ function ClusterLegend({ result }: { result: ClusterResult }) {
     const tooltip = `${groupName} · ${count.toLocaleString()} rows\n${details.join('\n')}`
     return <span className="legend-item" key={label} tabIndex={0} title={tooltip} aria-label={tooltip} data-tooltip={tooltip}><i style={{ background: label === '-1' ? '#a6aaa5' : colors[Number(label) % colors.length] }}/>{groupName} <small>{count.toLocaleString()}</small></span>
   })}</div>
+}
+
+function chartDomain(values: number[]): { low: number; high: number; below: number; above: number } {
+  const sorted = [...values].sort((a, b) => a - b)
+  const tail = sorted.length >= 100 ? 0.02 : 0
+  const at = (percentile: number) => sorted[Math.floor((sorted.length - 1) * percentile)]
+  let low = at(tail), high = at(1 - tail)
+  const below = values.filter(value => value < low).length, above = values.filter(value => value > high).length
+  if (low === high) { const padding = Math.max(Math.abs(low) * 0.05, 1); low -= padding; high += padding }
+  return { low, high, below, above }
+}
+
+type ChartView = {
+  xName: string
+  yName: string
+  xDomain: ReturnType<typeof chartDomain>
+  yDomain: ReturnType<typeof chartDomain>
+  dots: { x: number; y: number; xValue: number; yValue: number; label: number; row: number; edge: boolean }[]
+}
+
+function ClusterPlot({ result, chart, expanded }: { result: ClusterResult; chart: ChartView; expanded: boolean }) {
+  const [zoom, setZoom] = useState(1)
+  const projected = chart.xName.startsWith('Pattern summary')
+  const adjustZoom = (factor: number) => setZoom(current => Math.max(1, Math.min(8, Number((current * factor).toFixed(2)))))
+  const clippedX = chart.xDomain.below + chart.xDomain.above
+  const clippedY = chart.yDomain.below + chart.yDomain.above
+  const axisExplain = projected
+    ? 'These axes combine your selected columns into two pattern summaries. They have no original units; dots closer together have more similar patterns.'
+    : `The axes show actual values: ${chart.xName} (${chart.xDomain.low.toPrecision(3)} to ${chart.xDomain.high.toPrecision(3)}) and ${chart.yName} (${chart.yDomain.low.toPrecision(3)} to ${chart.yDomain.high.toPrecision(3)}). Clustering considers every selected feature.`
+  const clippedExplain = clippedX || clippedY
+    ? ` To keep extreme values from flattening the main pattern, the chart focuses on the middle 96% per axis; ${clippedX} rows are pinned to the x-axis edges and ${clippedY} to the y-axis edges. Hover edge dots for exact values.`
+    : ''
+  return <>
+    <div className="chart-guide"><span className="guide-dot">i</span><span><strong>Each dot is one row</strong> · Colors show the groups found by {result.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}. {axisExplain}{clippedExplain}</span></div>
+    <div className={`chart-area ${expanded ? 'expanded' : ''}`}>
+      <svg viewBox="0 0 560 300" role="img" aria-label="Interactive scatter plot of clustered rows" onWheel={event => { event.preventDefault(); adjustZoom(event.deltaY < 0 ? 1.2 : 1 / 1.2) }}>
+        <g transform={`translate(${280 * (1 - zoom)} ${150 * (1 - zoom)}) scale(${zoom})`}>
+          <line x1="24" y1="260" x2="536" y2="260" className="axis"/><line x1="24" y1="28" x2="24" y2="260" className="axis"/>
+          {[0, 1, 2, 3].map(i => <line key={i} x1="24" x2="536" y1={202 - i * 58} y2={202 - i * 58} className="gridline"/>)}
+          {chart.dots.map(dot => <circle key={dot.row} cx={dot.x} cy={dot.y} r={dot.edge ? (expanded ? 4.8 : 3.5) : (expanded ? 4 : 2.7)} fill={dot.label === -1 ? '#a6aaa5' : colors[dot.label % colors.length]} stroke={dot.edge ? '#344239' : 'none'} strokeWidth=".8" opacity=".68"><title>{`Row ${dot.row} · ${dot.label === -1 ? 'Noise / not assigned to a dense group' : `Cluster ${dot.label + 1}`} · ${chart.xName}: ${dot.xValue.toPrecision(5)} · ${chart.yName}: ${dot.yValue.toPrecision(5)}`}</title></circle>)}
+        </g>
+      </svg>
+      <div className="axis-label x">{chart.xName}</div><div className="axis-label y">{chart.yName}</div>
+      <div className="chart-controls" aria-label="Chart zoom controls"><button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom <= 1} onClick={() => adjustZoom(1 / 1.25)}><Minus size={13}/></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom >= 8} onClick={() => adjustZoom(1.25)}><Plus size={13}/></button><button type="button" aria-label="Reset zoom" title="Reset zoom" disabled={zoom === 1} onClick={() => setZoom(1)}><RotateCcw size={12}/></button></div>
+    </div>
+  </>
 }
 
 function App() {
@@ -107,14 +153,13 @@ function App() {
     const [xName, yName] = result.plot_features
     const xs = result.points.map(point => Number(point[xName]))
     const ys = result.points.map(point => Number(point[yName]))
-    const minX = Math.min(...xs), maxX = Math.max(...xs), minY = Math.min(...ys), maxY = Math.max(...ys)
-    const sx = (value: number) => 24 + ((value - minX) / (maxX - minX || 1)) * 512
-    const sy = (value: number) => 260 - ((value - minY) / (maxY - minY || 1)) * 232
-    return { xName, yName, minX, maxX, minY, maxY, dots: result.points.map((point, index) => ({ x: sx(xs[index]), y: sy(ys[index]), xValue: xs[index], yValue: ys[index], label: result.labels[index], row: index + 1 })) }
+    const xDomain = chartDomain(xs), yDomain = chartDomain(ys)
+    const sx = (value: number) => 24 + ((Math.max(xDomain.low, Math.min(xDomain.high, value)) - xDomain.low) / (xDomain.high - xDomain.low || 1)) * 512
+    const sy = (value: number) => 260 - ((Math.max(yDomain.low, Math.min(yDomain.high, value)) - yDomain.low) / (yDomain.high - yDomain.low || 1)) * 232
+  return { xName, yName, xDomain, yDomain, dots: result.points.map((point, index) => ({ x: sx(xs[index]), y: sy(ys[index]), xValue: xs[index], yValue: ys[index], label: result.labels[index], row: index + 1, edge: xs[index] < xDomain.low || xs[index] > xDomain.high || ys[index] < yDomain.low || ys[index] > yDomain.high })) }
   }, [result])
 
-  const projectedMap = chart?.xName.startsWith('Pattern summary') ?? false
-  const plot = (expanded = false) => chart ? <><div className="chart-guide"><span className="guide-dot">i</span><span><strong>Each dot is one row</strong> · Colors show the groups found by {result?.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}. {projectedMap ? 'The axes combine your selected columns into two pattern summaries. Their numbers have no original units; dots closer together have more similar patterns.' : `The axes show actual column values (${chart.xName}: ${chart.minX.toPrecision(3)}–${chart.maxX.toPrecision(3)}; ${chart.yName}: ${chart.minY.toPrecision(3)}–${chart.maxY.toPrecision(3)}). Clustering considers every selected feature.`}</span></div><div className={`chart-area ${expanded ? 'expanded' : ''}`}><svg viewBox="0 0 560 300" role="img" aria-label="Scatter plot of clustered rows"><line x1="24" y1="260" x2="536" y2="260" className="axis"/><line x1="24" y1="28" x2="24" y2="260" className="axis"/>{[0,1,2,3].map(i => <line key={i} x1="24" x2="536" y1={202-i*58} y2={202-i*58} className="gridline"/>)}{chart.dots.slice(0,1500).map(dot=><circle key={dot.row} cx={dot.x} cy={dot.y} r={expanded ? 5 : 4} fill={dot.label === -1 ? '#a6aaa5' : colors[dot.label % colors.length]} opacity=".82"><title>{`Row ${dot.row} · ${dot.label === -1 ? 'Noise / not assigned to a dense group' : `Cluster ${dot.label + 1}`} · ${chart.xName}: ${dot.xValue.toPrecision(4)} · ${chart.yName}: ${dot.yValue.toPrecision(4)}`}</title></circle>)}</svg><div className="axis-label x">{chart.xName}</div><div className="axis-label y">{chart.yName}</div></div></> : <div className="one-feature"><BarChart3 size={18}/> A map needs at least two usable dimensions. Try selecting more categorical features.</div>
+  const plot = (expanded = false) => chart ? <ClusterPlot result={result!} chart={chart} expanded={expanded}/> : <div className="one-feature"><BarChart3 size={18}/> A map needs at least two usable dimensions. Try selecting more categorical features.</div>
 
   function toggleFeature(name: string) { setFeatures(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]) }
 
@@ -156,7 +201,7 @@ function App() {
               <button className="run-button" onClick={() => void run()} disabled={!dataset || features.length === 0 || busy}>{busy ? <LoaderCircle size={16} className="spin"/> : <Play size={15} fill="currentColor"/>}{busy ? 'Working...' : 'Run clustering'}<ArrowUpRight size={15}/></button><p className="run-footnote">Runs in your browser · K-Means up to {MAX_KMEANS_ROWS.toLocaleString()} rows · DBSCAN up to {MAX_DBSCAN_ROWS.toLocaleString()} rows.</p>
             </div>
             {error && <div className="error-banner">{error}</div>}
-            <div className="insight-card"><div className="insight-icon"><Sparkles size={16}/></div><div><strong>A good place to start</strong><p>Patternly standardizes numeric features and encodes categories locally. Detected item columns are treated as shopping baskets.</p></div></div>
+            <div className="insight-card"><div className="insight-icon"><Sparkles size={16}/></div><div><strong>A good place to start</strong><p>Patternly scales numeric features, caps extreme values so a few outliers do not dominate the groups, and encodes categories locally. Detected item columns are treated as shopping baskets.</p></div></div>
             {runs.length > 1 && <div className="compare-card"><div className="compare-heading"><div><h3>Compare runs</h3><span>Recent experiments in this session</span></div><button className="text-button">Clear</button></div>{runs.map((item,index)=><div className="compare-row" key={index}><span className="compare-color" style={{background:colors[index]}}/><strong>{item.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}</strong><span>{item.cluster_count} clusters</span><b>{item.labels.length} rows</b></div>)}</div>}
             <div className="coming-soon"><div><span className="coming-icon">P</span><span><strong>More ways to explore</strong><small>PCA & outlier detection are on the way</small></span></div><span className="soon-pill">COMING SOON</span></div>
           </section>
