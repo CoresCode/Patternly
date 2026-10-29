@@ -67,8 +67,9 @@ test('recognizes categorical columns and clusters them with a projected map', ()
   assert.equal(data.info.column_info[0].kind, 'categorical')
   const result = clusterData(data, 'kmeans', ['color', 'shape'], 2, 0.5, 2)
   assert.equal(result.cluster_count, 2)
-  assert.deepEqual(result.plot_features, ['Component 1', 'Component 2'])
+  assert.deepEqual(result.plot_features, ['Pattern summary 1', 'Pattern summary 2'])
   assert.equal(result.points.length, 4)
+  assert.ok(result.cluster_summaries['0'].length > 0)
 })
 
 test('recognizes grocery item columns as a basket and uses those instead of a count', () => {
@@ -78,6 +79,7 @@ test('recognizes grocery item columns as a basket and uses those instead of a co
   const result = clusterData(data, 'kmeans', recommendedFeatures(data.info), 2, 0.5, 2)
   assert.equal(result.labels.length, 3)
   assert.ok(result.plot_features)
+  assert.match(result.cluster_summaries['0'][0], /Common items:/)
 })
 
 test('rejects numeric features on datasets that exceed the browser limit', () => {

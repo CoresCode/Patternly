@@ -32,6 +32,7 @@ export type ClusterResult = {
   inertia: number | null
   points: Record<string, number>[]
   plot_features: [string, string] | null
+  cluster_summaries?: Record<string, string[]>
 }
 
 export const MAX_FILE_BYTES = 25 * 1024 * 1024
@@ -253,6 +254,7 @@ export function clusterData(
   const counts: Record<string, number> = {}
   for (const label of labels) counts[String(label)] = (counts[String(label)] ?? 0) + 1
   const clusterCountFound = new Set(labels.filter(label => label !== -1)).size
+  const cluster_summaries = summarizeClusters(dataset, features, labels)
   let plot_features: [string, string] | null = null
   let plotPoints: Record<string, number>[] = []
   const allNumeric = features.every(feature => dataset.info.column_info.find(column => column.name === feature)?.kind === 'numeric')
@@ -262,8 +264,8 @@ export function clusterData(
   } else if (matrix.featureNames.length >= 2) {
     const projection = pcaProjection(scaled)
     if (projection) {
-      plot_features = ['Component 1', 'Component 2']
-      plotPoints = projection.map(([x, y]) => ({ 'Component 1': x, 'Component 2': y }))
+      plot_features = ['Pattern summary 1', 'Pattern summary 2']
+      plotPoints = projection.map(([x, y]) => ({ 'Pattern summary 1': x, 'Pattern summary 2': y }))
     }
   }
   return {
@@ -276,7 +278,55 @@ export function clusterData(
     inertia,
     points: plotPoints,
     plot_features,
+    cluster_summaries,
   }
+}
+
+function summarizeClusters(dataset: ParsedDataset, features: string[], labels: number[]): Record<string, string[]> {
+  const summaries: Record<string, string[]> = {}
+  const groups = new Map<number, number[]>()
+  const columns = new Map(dataset.info.column_info.map(column => [column.name, column]))
+  labels.forEach((label, index) => {
+    const indices = groups.get(label)
+    if (indices) indices.push(index)
+    else groups.set(label, [index])
+  })
+  for (const [group, indices] of groups) {
+    const details: string[] = []
+    const basketFeatures = features.filter(feature => columns.get(feature)?.basket)
+    if (basketFeatures.length) {
+      const counts = new Map<string, number>()
+      for (const index of indices) {
+        const itemsInRow = new Set(basketFeatures.map(feature => dataset.records[index][feature]).filter(Boolean))
+        for (const item of itemsInRow) counts.set(item, (counts.get(item) ?? 0) + 1)
+      }
+      const top = [...counts.entries()].sort((a, b) => b[1] - a[1]).slice(0, 4)
+      if (top.length) details.push(`Common items: ${top.map(([item, count]) => `${item} (${Math.round(count / indices.length * 100)}%)`).join(', ')}`)
+    }
+    for (const feature of features.filter(name => !basketFeatures.includes(name))) {
+      const column = columns.get(feature)
+      if (column?.kind === 'numeric') {
+        const values = indices.map(index => Number(dataset.records[index][feature])).filter(Number.isFinite)
+        if (values.length) details.push(`${feature}: average ${formatValue(values.reduce((sum, value) => sum + value, 0) / values.length)}`)
+      } else {
+        const counts = new Map<string, number>()
+        for (const index of indices) {
+          const value = dataset.records[index][feature]
+          if (value) counts.set(value, (counts.get(value) ?? 0) + 1)
+        }
+        const common = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+        if (common) details.push(`${feature}: most common ${common[0]} (${Math.round(common[1] / indices.length * 100)}%)`)
+      }
+      if (details.length >= 3) break
+    }
+    if (group === -1) details.unshift('Rows that did not fit a dense group (DBSCAN noise).')
+    summaries[String(group)] = details.length ? details.slice(0, 3) : ['Rows grouped by similarity across the selected features.']
+  }
+  return summaries
+}
+
+function formatValue(value: number): string {
+  return new Intl.NumberFormat(undefined, { maximumFractionDigits: 2 }).format(value)
 }
 
 function squaredDistance(left: number[], right: number[]): number {
