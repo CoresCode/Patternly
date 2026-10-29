@@ -4,6 +4,8 @@ export type ColumnInfo = {
   missing: number
   unique: number
   numeric: boolean
+  kind: 'numeric' | 'categorical' | 'text'
+  basket: boolean
 }
 
 export type DatasetInfo = {
@@ -17,6 +19,7 @@ export type DatasetInfo = {
 export type ParsedDataset = {
   info: DatasetInfo
   records: Record<string, string>[]
+  sourceText: string
 }
 
 export type ClusterResult = {
@@ -28,11 +31,13 @@ export type ClusterResult = {
   noise_count: number
   inertia: number | null
   points: Record<string, number>[]
+  plot_features: [string, string] | null
 }
 
 export const MAX_FILE_BYTES = 25 * 1024 * 1024
 export const MAX_KMEANS_ROWS = 10_000
 export const MAX_DBSCAN_ROWS = 2_500
+export const MAX_ENCODED_FEATURES = 1_500
 
 export function parseCsv(text: string, filename = 'dataset.csv'): ParsedDataset {
   const normalized = text.replace(/^\uFEFF/, '')
@@ -52,16 +57,25 @@ export function parseCsv(text: string, filename = 'dataset.csv'): ParsedDataset 
   })
   if (records.length === 0) throw new Error('The CSV has no data rows.')
 
+  const basketHeaders = new Set(headers.filter(name => /^item[\s_-]*\d+$/i.test(name)))
+  const basketMode = basketHeaders.size >= 3
   const columnInfo = headers.map(name => {
     const values = records.map(record => record[name])
     const present = values.filter(value => value !== '')
     const numeric = present.length > 0 && present.every(value => Number.isFinite(Number(value)))
+    const unique = new Set(present).size
+    const basket = basketMode && basketHeaders.has(name)
+    const categoryLimit = Math.min(500, Math.max(20, Math.ceil(records.length * 0.15)))
+    const categorical = !numeric && (basket || (present.length > 0 && unique <= categoryLimit && unique > 1))
+    const kind: ColumnInfo['kind'] = numeric ? 'numeric' : categorical ? 'categorical' : 'text'
     return {
       name,
-      type: numeric ? 'number' : 'text',
+      type: numeric ? 'number' : categorical ? 'category' : 'text',
       missing: values.length - present.length,
-      unique: new Set(present).size,
+      unique,
       numeric,
+      kind,
+      basket,
     }
   })
 
@@ -74,6 +88,7 @@ export function parseCsv(text: string, filename = 'dataset.csv'): ParsedDataset 
       preview: records.slice(0, 12),
     },
     records,
+    sourceText: normalized,
   }
 }
 
@@ -138,26 +153,72 @@ function uniqueHeaders(rawHeaders: string[]): string[] {
   })
 }
 
-function numericMatrix(dataset: ParsedDataset, features: string[]): { raw: number[][]; scaled: number[][] } {
-  if (features.length === 0) throw new Error('Choose at least one numeric feature.')
-  if (features.some(feature => !dataset.info.column_info.some(column => column.name === feature && column.numeric))) {
-    throw new Error('Only numeric columns can be used for clustering.')
-  }
-  const raw = dataset.records.map(record => features.map(feature => record[feature] === '' ? Number.NaN : Number(record[feature])))
-  for (let column = 0; column < features.length; column += 1) {
-    const values = raw.map(row => row[column]).filter(Number.isFinite).sort((a, b) => a - b)
-    const middle = Math.floor(values.length / 2)
-    const median = values.length === 0 ? 0 : values.length % 2 ? values[middle] : (values[middle - 1] + values[middle]) / 2
-    for (const row of raw) if (!Number.isFinite(row[column])) row[column] = median
+export function recommendedFeatures(info: DatasetInfo): string[] {
+  const basket = info.column_info.filter(column => column.basket)
+  if (basket.length >= 3) return basket.map(column => column.name)
+  const numeric = info.column_info.filter(column => column.kind === 'numeric').map(column => column.name)
+  if (numeric.length) return numeric.slice(0, 2)
+  return info.column_info.filter(column => column.kind === 'categorical').slice(0, 3).map(column => column.name)
+}
+
+type EncodedMatrix = { values: number[][]; featureNames: string[]; numericValues: number[][]; numericNames: string[] }
+
+function numericMatrix(dataset: ParsedDataset, features: string[]): EncodedMatrix {
+  if (features.length === 0) throw new Error('Select at least one numeric or categorical feature.')
+  const columnsByName = new Map(dataset.info.column_info.map(column => [column.name, column]))
+  if (features.some(feature => !columnsByName.has(feature) || columnsByName.get(feature)?.kind === 'text')) {
+    throw new Error('Choose numeric columns, categorical columns, or detected item columns.')
   }
 
-  const means = features.map((_, column) => raw.reduce((sum, row) => sum + row[column], 0) / raw.length)
-  const scales = features.map((_, column) => {
-    const variance = raw.reduce((sum, row) => sum + (row[column] - means[column]) ** 2, 0) / raw.length
+  const numericFeatures = features.filter(feature => columnsByName.get(feature)?.kind === 'numeric')
+  const categoryFeatures = features.filter(feature => columnsByName.get(feature)?.kind === 'categorical' && !columnsByName.get(feature)?.basket)
+  const basketFeatures = features.filter(feature => columnsByName.get(feature)?.basket)
+  const values = dataset.records.map(() => [] as number[])
+  const featureNames: string[] = []
+  const numericValues = dataset.records.map(() => [] as number[])
+
+  for (const feature of numericFeatures) {
+    const columnValues = dataset.records.map(record => record[feature] === '' ? Number.NaN : Number(record[feature]))
+    const sorted = columnValues.filter(Number.isFinite).sort((a, b) => a - b)
+    const middle = Math.floor(sorted.length / 2)
+    const median = sorted.length === 0 ? 0 : sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2
+    const filled = columnValues.map(value => Number.isFinite(value) ? value : median)
+    numericValues.forEach((row, index) => row.push(filled[index]))
+    featureNames.push(feature)
+    filled.forEach((value, index) => values[index].push(value))
+  }
+
+  for (const feature of categoryFeatures) {
+    const vocabulary = [...new Set(dataset.records.map(record => record[feature]).filter(value => value !== ''))].sort()
+    for (const category of vocabulary) {
+      featureNames.push(`${feature}=${category}`)
+      dataset.records.forEach((record, index) => values[index].push(record[feature] === category ? 1 : 0))
+    }
+  }
+
+  if (basketFeatures.length) {
+    const vocabulary = [...new Set(dataset.records.flatMap(record => basketFeatures.map(feature => record[feature]).filter(value => value !== '')))].sort()
+    for (const item of vocabulary) {
+      featureNames.push(`item=${item}`)
+      dataset.records.forEach((record, index) => {
+        const present = basketFeatures.some(feature => record[feature] === item)
+        values[index].push(present ? 1 : 0)
+      })
+    }
+  }
+
+  if (featureNames.length > MAX_ENCODED_FEATURES) {
+    throw new Error(`These selections create ${featureNames.length.toLocaleString()} encoded features. Select fewer columns or reduce their category count (maximum ${MAX_ENCODED_FEATURES.toLocaleString()}).`)
+  }
+  if (featureNames.length === 0) throw new Error('The selected columns do not contain usable numeric or categorical values.')
+
+  const means = featureNames.map((_, column) => values.reduce((sum, row) => sum + row[column], 0) / values.length)
+  const scales = featureNames.map((_, column) => {
+    const variance = values.reduce((sum, row) => sum + (row[column] - means[column]) ** 2, 0) / values.length
     return Math.sqrt(variance) || 1
   })
-  const scaled = raw.map(row => row.map((value, column) => (value - means[column]) / scales[column]))
-  return { raw, scaled }
+  const scaled = values.map(row => row.map((value, column) => (value - means[column]) / scales[column]))
+  return { values: scaled, featureNames, numericValues, numericNames: numericFeatures }
 }
 
 export function clusterData(
@@ -172,7 +233,8 @@ export function clusterData(
   if (dataset.records.length > limit) {
     throw new Error(`${algorithm === 'dbscan' ? 'DBSCAN' : 'K-Means'} supports up to ${limit.toLocaleString()} rows in this browser. Narrow the CSV and try again.`)
   }
-  const { raw, scaled } = numericMatrix(dataset, features)
+  const matrix = numericMatrix(dataset, features)
+  const scaled = matrix.values
   let labels: number[]
   let inertia: number | null = null
   if (algorithm === 'kmeans') {
@@ -191,6 +253,19 @@ export function clusterData(
   const counts: Record<string, number> = {}
   for (const label of labels) counts[String(label)] = (counts[String(label)] ?? 0) + 1
   const clusterCountFound = new Set(labels.filter(label => label !== -1)).size
+  let plot_features: [string, string] | null = null
+  let plotPoints: Record<string, number>[] = []
+  const allNumeric = features.every(feature => dataset.info.column_info.find(column => column.name === feature)?.kind === 'numeric')
+  if (allNumeric && matrix.numericNames.length >= 2) {
+    plot_features = [matrix.numericNames[0], matrix.numericNames[1]]
+    plotPoints = matrix.numericValues.map(row => ({ [plot_features![0]]: row[0], [plot_features![1]]: row[1] }))
+  } else if (matrix.featureNames.length >= 2) {
+    const projection = pcaProjection(scaled)
+    if (projection) {
+      plot_features = ['Component 1', 'Component 2']
+      plotPoints = projection.map(([x, y]) => ({ 'Component 1': x, 'Component 2': y }))
+    }
+  }
   return {
     algorithm,
     features,
@@ -199,12 +274,41 @@ export function clusterData(
     cluster_count: clusterCountFound,
     noise_count: labels.filter(label => label === -1).length,
     inertia,
-    points: raw.map(row => Object.fromEntries(features.map((feature, index) => [feature, row[index]]))),
+    points: plotPoints,
+    plot_features,
   }
 }
 
 function squaredDistance(left: number[], right: number[]): number {
   return left.reduce((sum, value, index) => sum + (value - right[index]) ** 2, 0)
+}
+
+function pcaProjection(points: number[][]): [number, number][] | null {
+  const dimensions = points[0]?.length ?? 0
+  if (dimensions < 2) return null
+  const components: number[][] = []
+  for (let component = 0; component < 2; component += 1) {
+    let vector = Array.from({ length: dimensions }, (_, index) => Math.sin((index + 1) * (component + 2) * 1.618))
+    const normalize = (values: number[]) => {
+      const length = Math.sqrt(values.reduce((sum, value) => sum + value * value, 0)) || 1
+      return values.map(value => value / length)
+    }
+    vector = normalize(vector)
+    for (let iteration = 0; iteration < 32; iteration += 1) {
+      const scores = points.map(row => row.reduce((sum, value, index) => sum + value * vector[index], 0))
+      const next = Array.from({ length: dimensions }, (_, column) => points.reduce((sum, row, rowIndex) => sum + row[column] * scores[rowIndex], 0) / points.length)
+      for (const previous of components) {
+        const overlap = next.reduce((sum, value, index) => sum + value * previous[index], 0)
+        next.forEach((_, index) => { next[index] -= overlap * previous[index] })
+      }
+      vector = normalize(next)
+    }
+    components.push(vector)
+  }
+  return points.map(row => [
+    row.reduce((sum, value, index) => sum + value * components[0][index], 0),
+    row.reduce((sum, value, index) => sum + value * components[1][index], 0),
+  ])
 }
 
 function runKMeans(points: number[][], k: number): { labels: number[]; inertia: number } {

@@ -1,7 +1,7 @@
 ﻿import assert from 'node:assert/strict'
 import { readFile } from 'node:fs/promises'
 import test from 'node:test'
-import { clusterData, parseCsv, readCsvFile } from '../src/data.ts'
+import { clusterData, parseCsv, readCsvFile, recommendedFeatures } from '../src/data.ts'
 
 const groupedCsv = `x,y,label\n0,0,a\n0.1,0.1,a\n-0.1,-0.1,a\n10,10,b\n10.1,9.9,b\n9.9,10.1,b\n`
 
@@ -59,6 +59,25 @@ test('runs DBSCAN and identifies noise points', () => {
   assert.equal(result.cluster_count, 2)
   assert.equal(result.noise_count, 1)
   assert.equal(result.cluster_counts['-1'], 1)
+})
+
+test('recognizes categorical columns and clusters them with a projected map', () => {
+  const data = parseCsv('color,shape\nred,round\nred,round\nblue,square\nblue,square\n')
+  assert.deepEqual(recommendedFeatures(data.info), ['color', 'shape'])
+  assert.equal(data.info.column_info[0].kind, 'categorical')
+  const result = clusterData(data, 'kmeans', ['color', 'shape'], 2, 0.5, 2)
+  assert.equal(result.cluster_count, 2)
+  assert.deepEqual(result.plot_features, ['Component 1', 'Component 2'])
+  assert.equal(result.points.length, 4)
+})
+
+test('recognizes grocery item columns as a basket and uses those instead of a count', () => {
+  const data = parseCsv('Item(s),Item 1,Item 2,Item 3\n2,milk,bread,\n2,apples,milk,\n2,bread,apples,\n')
+  assert.deepEqual(recommendedFeatures(data.info), ['Item 1', 'Item 2', 'Item 3'])
+  assert.equal(data.info.column_info.find(column => column.name === 'Item 1').basket, true)
+  const result = clusterData(data, 'kmeans', recommendedFeatures(data.info), 2, 0.5, 2)
+  assert.equal(result.labels.length, 3)
+  assert.ok(result.plot_features)
 })
 
 test('rejects numeric features on datasets that exceed the browser limit', () => {
