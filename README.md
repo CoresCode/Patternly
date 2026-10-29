@@ -1,33 +1,34 @@
 ﻿# Patternly
 
-Patternly is an interactive machine learning exploration studio for uploading datasets, exploring their structure, running clustering experiments, and comparing results.
+Patternly is a browser-based machine learning exploration studio. It reads your files locally, previews the data, runs clustering in your browser, and shows the results on an interactive cluster map.
 
-## Current features
+## Start the app
 
-- CSV upload and dataset profile with row/column counts, missing values, numeric feature detection, and a data preview
-- K-Means and DBSCAN clustering on standardized numeric features
-- Cluster map and per-cluster counts, including DBSCAN noise points
-- A bundled mini flower dataset for trying the workflow
-- PCA and outlier detection are planned follow-on features
-
-## Start Patternly
-
-From this folder, run `npm.cmd run dev:all`. This starts the frontend and API together. Open the local address Vite prints. Keep that terminal open while using the app; press Ctrl+C to stop both services.
-
-The API is available at `http://localhost:8000`.
-
-## Local development setup
-
-This machine did not expose a `py` or `python` command to the Codex session. To keep setup isolated, Patternly includes an ignored, project-local Python 3.13 embeddable runtime in `.tools/python`; it does not modify system Python. Python dependencies are installed in that runtime. The frontend dependencies are installed under `node_modules` and recorded in `package-lock.json`.
-
-For a fresh checkout, install Node dependencies with `npm.cmd install`. Install Python dependencies from the `backend` folder with:
+From this folder, run:
 
 ```powershell
-..\.tools\python\python.exe -m pip install --target ..\.tools\python\Lib\site-packages -r requirements.txt
+npm.cmd install
+npm.cmd run dev
 ```
 
-PCA and outlier detection remain future work.
+Open the local address Vite prints. Patternly does not need a Python service or a separate API server.
 
-## Run API tests
+## Supported file format
 
-From the backend folder, run `..\.tools\python\python.exe -m unittest discover -s tests -v`.
+- `.csv` files up to 25 MB
+- A header row and at least two columns are required
+- Comma-separated CSV is standard; tab- and semicolon-separated files are detected too
+- Numeric columns are used for clustering. Text columns remain available in the preview.
+- K-Means supports up to 10,000 rows; DBSCAN supports up to 2,500 rows in the browser
+
+The bundled mini flower sample is included in the frontend build. Clicking it does not make a network request. Uploaded file contents also stay in your browser; Patternly has no backend API.
+
+## Clustering
+
+Patternly fills missing numeric values with the column median, standardizes the selected features, and runs deterministic K-Means or DBSCAN locally. Select at least one numeric feature; select two to see the scatter plot. Use the expand icon in the plot header to open a larger view.
+
+## Tests
+
+Run `npm.cmd test` to check CSV parsing, the bundled sample, K-Means, DBSCAN, and row-limit handling.
+
+PCA and outlier detection are planned follow-on features.

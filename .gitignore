@@ -1,23 +1,15 @@
-node_modules/
+﻿node_modules/
 dist/
-.venv/
-__pycache__/
-*.py[cod]
+.npm-cache/
+*.tsbuildinfo
 .env
 
 .tools/
 .npm-cache/
-.python-embed.zip
-python-*.log
-python-install_*.log
-python-user-install_*.log
-python-elevated_*.log
-
 python-3.13.17-amd64.exe
 .python-embed.zip
 python-*.log
-python-install_*.log
-python-user-install_*.log
-python-elevated_*.log
 
-tsconfig.tsbuildinfo
+__pycache__/
+*.py[cod]
+.venv/
