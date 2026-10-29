@@ -53,6 +53,13 @@ test('runs deterministic K-Means and returns assignments for every row', () => {
   assert.deepEqual(result.labels, clusterData(data, 'kmeans', ['x', 'y'], 2, 0.5, 2).labels)
 })
 
+test('keeps every selected numeric column available for interactive chart axes', () => {
+  const data = parseCsv('x,y,z,kind\n0,0,1,a\n0.1,0.1,2,a\n10,10,3,b\n10.1,9.9,4,b\n')
+  const result = clusterData(data, 'kmeans', ['x', 'y', 'z', 'kind'], 2, 0.5, 2)
+  assert.deepEqual(result.plot_features, ['x', 'y'])
+  assert.deepEqual(Object.keys(result.points[0]), ['x', 'y', 'z'])
+})
+
 test('caps a few extreme numeric values so they do not dominate K-Means', () => {
   const rows = [...Array(49).fill('0,0'), ...Array(50).fill('1,1'), '1000000000,1000000000']
   const data = parseCsv(`x,y\n${rows.join('\n')}`)

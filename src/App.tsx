@@ -34,13 +34,13 @@ function chartDomain(values: number[]): { low: number; high: number; below: numb
 type ChartView = {
   xName: string
   yName: string
+  axisChoices: string[]
   xDomain: ReturnType<typeof chartDomain>
   yDomain: ReturnType<typeof chartDomain>
   dots: { x: number; y: number; xValue: number; yValue: number; label: number; row: number; edge: boolean }[]
 }
 
-function ClusterPlot({ result, chart, expanded }: { result: ClusterResult; chart: ChartView; expanded: boolean }) {
-  const [zoom, setZoom] = useState(1)
+function ClusterPlot({ result, chart, expanded, zoom, setZoom, onAxesChange }: { result: ClusterResult; chart: ChartView; expanded: boolean; zoom: number; setZoom: React.Dispatch<React.SetStateAction<number>>; onAxesChange: (axis: 'x' | 'y', name: string) => void }) {
   const projected = chart.xName.startsWith('Pattern summary')
   const adjustZoom = (factor: number) => setZoom(current => Math.max(1, Math.min(8, Number((current * factor).toFixed(2)))))
   const clippedX = chart.xDomain.below + chart.xDomain.above
@@ -53,6 +53,7 @@ function ClusterPlot({ result, chart, expanded }: { result: ClusterResult; chart
     : ''
   return <>
     <div className="chart-guide"><span className="guide-dot">i</span><span><strong>Each dot is one row</strong> · Colors show the groups found by {result.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}. {axisExplain}{clippedExplain}</span></div>
+    {chart.axisChoices.length > 2 && <div className="axis-selectors"><span className="axis-select-title">SHOW ON MAP</span><label>X <select aria-label="Horizontal chart axis" value={chart.xName} onChange={event => onAxesChange('x', event.target.value)}>{chart.axisChoices.map(name => <option key={name} value={name} disabled={name === chart.yName}>{name}</option>)}</select></label><label>Y <select aria-label="Vertical chart axis" value={chart.yName} onChange={event => onAxesChange('y', event.target.value)}>{chart.axisChoices.map(name => <option key={name} value={name} disabled={name === chart.xName}>{name}</option>)}</select></label></div>}
     <div className={`chart-area ${expanded ? 'expanded' : ''}`}>
       <svg viewBox="0 0 560 300" role="img" aria-label="Interactive scatter plot of clustered rows" onWheel={event => { event.preventDefault(); adjustZoom(event.deltaY < 0 ? 1.2 : 1 / 1.2) }}>
         <g transform={`translate(${280 * (1 - zoom)} ${150 * (1 - zoom)}) scale(${zoom})`}>
@@ -81,6 +82,8 @@ function App() {
   const [methodInfo, setMethodInfo] = useState<'kmeans' | 'dbscan' | null>(null)
   const [dragging, setDragging] = useState(false)
   const [chartExpanded, setChartExpanded] = useState(false)
+  const [chartZoom, setChartZoom] = useState(1)
+  const [axisOverride, setAxisOverride] = useState<[string, string] | null>(null)
   const [page, setPage] = useState<'studio' | 'datasets' | 'experiments'>('studio')
   const [datasetId, setDatasetId] = useState('')
   const [savedDatasets, setSavedDatasets] = useState<SavedDataset[]>([])
@@ -101,7 +104,7 @@ function App() {
       const saved = await getSavedDataset(id)
       if (!saved) throw new Error('This saved dataset is no longer available in this browser.')
       const parsed = parseCsv(saved.csvText, saved.name)
-      setDataset(parsed); setDatasetId(saved.id); setFeatures(recommendedFeatures(parsed.info)); setResult(null); setError(''); setPage('studio')
+      setDataset(parsed); setDatasetId(saved.id); setFeatures(recommendedFeatures(parsed.info)); setResult(null); setAxisOverride(null); setChartZoom(1); setError(''); setPage('studio')
     } catch (err) { setError(err instanceof Error ? err.message : 'Could not open dataset.'); setPage('studio') }
   }
 
@@ -112,7 +115,7 @@ function App() {
 
   async function selectFile(next: File | undefined) {
     if (!next) return
-    setError(''); setBusy(true); setResult(null); setRuns([]); setChartExpanded(false)
+    setError(''); setBusy(true); setResult(null); setAxisOverride(null); setChartZoom(1); setRuns([]); setChartExpanded(false)
     try {
       const parsed = await readCsvFile(next)
       setDataset(parsed); setDatasetId('')
@@ -131,7 +134,7 @@ function App() {
     try {
       await new Promise(resolve => setTimeout(resolve, 0))
       const next = clusterData(dataset, algorithm, features, clusterCount, eps, minSamples)
-      setResult(next); setRuns(previous => [next, ...previous].slice(0, 3))
+      setResult(next); setChartZoom(1); setRuns(previous => [next, ...previous].slice(0, 3))
       if (datasetId) {
         try {
           const saved = makeSavedExperiment({ datasetId, datasetName: dataset.info.filename, algorithm, features: [...features], clusterCountRequested: clusterCount, eps, minSamples, result: next })
@@ -150,16 +153,24 @@ function App() {
   const previewColumns = dataset?.info.column_info.slice(0, 5) ?? []
   const chart = useMemo(() => {
     if (!result || !result.plot_features) return null
-    const [xName, yName] = result.plot_features
+    const axisChoices = Object.keys(result.points[0] ?? {})
+    const defaultAxes = result.plot_features
+    const xName = axisOverride && axisChoices.includes(axisOverride[0]) && axisOverride[0] !== axisOverride[1] ? axisOverride[0] : defaultAxes[0]
+    const yName = axisOverride && axisChoices.includes(axisOverride[1]) && axisOverride[0] !== axisOverride[1] ? axisOverride[1] : defaultAxes[1]
     const xs = result.points.map(point => Number(point[xName]))
     const ys = result.points.map(point => Number(point[yName]))
     const xDomain = chartDomain(xs), yDomain = chartDomain(ys)
     const sx = (value: number) => 24 + ((Math.max(xDomain.low, Math.min(xDomain.high, value)) - xDomain.low) / (xDomain.high - xDomain.low || 1)) * 512
     const sy = (value: number) => 260 - ((Math.max(yDomain.low, Math.min(yDomain.high, value)) - yDomain.low) / (yDomain.high - yDomain.low || 1)) * 232
-  return { xName, yName, xDomain, yDomain, dots: result.points.map((point, index) => ({ x: sx(xs[index]), y: sy(ys[index]), xValue: xs[index], yValue: ys[index], label: result.labels[index], row: index + 1, edge: xs[index] < xDomain.low || xs[index] > xDomain.high || ys[index] < yDomain.low || ys[index] > yDomain.high })) }
-  }, [result])
+    return { xName, yName, axisChoices, xDomain, yDomain, dots: result.points.map((point, index) => ({ x: sx(xs[index]), y: sy(ys[index]), xValue: xs[index], yValue: ys[index], label: result.labels[index], row: index + 1, edge: xs[index] < xDomain.low || xs[index] > xDomain.high || ys[index] < yDomain.low || ys[index] > yDomain.high })) }
+  }, [result, axisOverride])
 
-  const plot = (expanded = false) => chart ? <ClusterPlot result={result!} chart={chart} expanded={expanded}/> : <div className="one-feature"><BarChart3 size={18}/> A map needs at least two usable dimensions. Try selecting more categorical features.</div>
+  const changeAxis = (axis: 'x' | 'y', name: string) => {
+    const currentX = chart?.xName ?? result?.plot_features?.[0] ?? name
+    const currentY = chart?.yName ?? result?.plot_features?.[1] ?? name
+    setAxisOverride(axis === 'x' ? [name, currentY] : [currentX, name]); setChartZoom(1)
+  }
+  const plot = (expanded = false) => chart ? <ClusterPlot result={result!} chart={chart} expanded={expanded} zoom={chartZoom} setZoom={setChartZoom} onAxesChange={changeAxis}/> : <div className="one-feature"><BarChart3 size={18}/> A map needs at least two usable dimensions. Try selecting more categorical features.</div>
 
   function toggleFeature(name: string) { setFeatures(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]) }
 
@@ -178,7 +189,7 @@ function App() {
     <main className="main-area">
       <header className="topbar"><div className="crumb">Workspace <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button" aria-label="Help"><CircleHelp size={17}/></button><div className="avatar small">P</div></div></header>
       {page === 'datasets' ? <LibraryPage title="Your datasets" description="Every CSV you add is saved in this browser, with its past clustering reports." empty="Upload a CSV in Studio to start your library.">{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${latest.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Each run keeps its settings, cluster assignments, map, and summary for review." empty="Run clustering in Studio to create your first report.">{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{item.algorithm === 'kmeans' ? 'K-Means' : 'DBSCAN'}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button></article>)}</LibraryPage> : <div className="content">
-        <div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> DATA EXPLORATION</div><h1>Find the shape in your data.</h1><p>Bring a dataset, try a clustering method, and see what patterns emerge.</p></div><button className="quiet-button" onClick={() => { setDataset(null); setResult(null); setRuns([]); setError(''); setChartExpanded(false) }}><Plus size={16}/> New exploration</button></div>
+        <div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> DATA EXPLORATION</div><h1>Find the shape in your data.</h1><p>Bring a dataset, try a clustering method, and see what patterns emerge.</p></div><button className="quiet-button" onClick={() => { setDataset(null); setResult(null); setAxisOverride(null); setChartZoom(1); setRuns([]); setError(''); setChartExpanded(false) }}><Plus size={16}/> New exploration</button></div>
         <div className="layout-grid">
           <section className="left-column">
             <div className="section-title"><span className="step">01</span><div><h2>Your dataset</h2><p>Start with a CSV file to explore.</p></div></div>
@@ -186,7 +197,7 @@ function App() {
               <input type="file" accept=".csv,text/csv" onChange={event => { void selectFile(event.target.files?.[0]); event.currentTarget.value = '' }}/><div className="upload-icon"><UploadCloud size={21}/></div><strong>{busy ? 'Reading your dataset...' : 'Drop your CSV here, or browse'}</strong><span>CSV only · up to {MAX_FILE_BYTES / 1024 / 1024} MB · processed in your browser</span><span className="browse-link">Choose a file <ArrowDownToLine size={13}/></span>
             </label> : <div className="dataset-card"><div className="file-icon"><FileSpreadsheet size={18}/></div><div className="dataset-name"><strong>{dataset.info.filename}</strong><span>{dataset.info.rows.toLocaleString()} rows <i/> {dataset.info.columns} columns</span></div><button className="remove-file" onClick={() => {setDataset(null); setResult(null)}} aria-label="Remove dataset"><X size={16}/></button><div className="dataset-stats"><div><span>ROWS</span><strong>{dataset.info.rows.toLocaleString()}</strong></div><div><span>FEATURES</span><strong>{dataset.info.columns}</strong></div><div><span>USABLE</span><strong>{clusterableColumns.length}</strong></div></div></div>}
             {dataset && <div className="preview-card"><div className="card-heading"><div><h3>Quick preview</h3><span>First 12 rows · {dataset.info.column_info.length} columns detected</span></div><span className="text-button">Processed locally <Check size={13}/></span></div><div className="table-wrap"><table><thead><tr>{previewColumns.map(col => <th key={col.name}>{col.name}<small>{col.type}</small></th>)}</tr></thead><tbody>{dataset.info.preview.map((row, index) => <tr key={index}>{previewColumns.map(col => <td key={col.name}>{row[col.name] === '' ? <em>empty</em> : String(row[col.name])}</td>)}</tr>)}</tbody></table></div></div>}
-            {dataset && result && <div className="result-card"><div className="card-heading"><div><h3>Cluster map</h3><span>{result.plot_features?.join(' × ') ?? result.features.join(', ')} · {result.labels.length.toLocaleString()} records</span></div><div className="visual-actions">{chart && <button className="icon-button expand-button" aria-label="Expand visualization" title="Expand visualization" onClick={() => setChartExpanded(true)}><Maximize2 size={15}/></button>}<button className="export-button"><ArrowDownToLine size={14}/> Export</button></div></div>
+            {dataset && result && <div className="result-card"><div className="card-heading"><div><h3>Cluster map</h3><span>{chart ? `${chart.xName} × ${chart.yName}` : result.features.join(', ')} · {result.labels.length.toLocaleString()} records</span></div><div className="visual-actions">{chart && <button className="icon-button expand-button" aria-label="Expand visualization" title="Expand visualization" onClick={() => setChartExpanded(true)}><Maximize2 size={15}/></button>}<button className="export-button"><ArrowDownToLine size={14}/> Export</button></div></div>
               {plot()}
               <ClusterLegend result={result}/>
             </div>}
@@ -210,7 +221,7 @@ function App() {
         <footer className="footer"><span>Patternly <i/> A little more clarity in every dataset.</span><span>Built for curious minds <Sparkles size={12}/></span></footer>
       </div>}
     </main>
-    {chartExpanded && result && <div className="modal-backdrop" onMouseDown={() => setChartExpanded(false)}><section className="chart-modal" role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><h2 id="expanded-chart-title">Cluster map</h2><span>{result.plot_features?.join(' vs ') ?? result.features.join(', ')} · {result.labels.length.toLocaleString()} records</span></div><button className="icon-button" aria-label="Close expanded visualization" onClick={() => setChartExpanded(false)}><X size={18}/></button></div>{plot(true)}<ClusterLegend result={result}/></section></div>}
+    {chartExpanded && result && <div className="modal-backdrop" onMouseDown={() => setChartExpanded(false)}><section className="chart-modal" role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><h2 id="expanded-chart-title">Cluster map</h2><span>{chart ? `${chart.xName} vs ${chart.yName}` : result.features.join(', ')} · {result.labels.length.toLocaleString()} records</span></div><button className="icon-button" aria-label="Close expanded visualization" onClick={() => setChartExpanded(false)}><X size={18}/></button></div>{plot(true)}<ClusterLegend result={result}/></section></div>}
   </div>
 }
 

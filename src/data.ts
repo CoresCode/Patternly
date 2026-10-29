@@ -265,10 +265,9 @@ export function clusterData(
   const cluster_summaries = summarizeClusters(dataset, features, labels)
   let plot_features: [string, string] | null = null
   let plotPoints: Record<string, number>[] = []
-  const allNumeric = features.every(feature => dataset.info.column_info.find(column => column.name === feature)?.kind === 'numeric')
-  if (allNumeric && matrix.numericNames.length >= 2) {
+  if (matrix.numericNames.length >= 2) {
     plot_features = [matrix.numericNames[0], matrix.numericNames[1]]
-    plotPoints = matrix.numericValues.map(row => ({ [plot_features![0]]: row[0], [plot_features![1]]: row[1] }))
+    plotPoints = matrix.numericValues.map(row => Object.fromEntries(matrix.numericNames.map((name, index) => [name, row[index]])))
   } else if (matrix.featureNames.length >= 2) {
     const projection = pcaProjection(scaled)
     if (projection) {
