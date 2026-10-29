@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Minus, Play, Plus, RotateCcw, Sparkles, UploadCloud, X } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { clusterData, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ParsedDataset } from './data'
 import { getSavedDataset, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
 import sampleCsv from './data/mini-flowers.csv?raw'
@@ -62,8 +62,8 @@ function ClusterPlot({ result, chart, expanded }: { result: ClusterResult; chart
         </g>
       </svg>
       <div className="axis-label x">{chart.xName}</div><div className="axis-label y">{chart.yName}</div>
-      <div className="chart-controls" aria-label="Chart zoom controls"><button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom <= 1} onClick={() => adjustZoom(1 / 1.25)}><Minus size={13}/></button><span>{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom >= 8} onClick={() => adjustZoom(1.25)}><Plus size={13}/></button><button type="button" aria-label="Reset zoom" title="Reset zoom" disabled={zoom === 1} onClick={() => setZoom(1)}><RotateCcw size={12}/></button></div>
     </div>
+    <div className="chart-zoom-bar" aria-label="Chart zoom controls"><span className="zoom-caption">ZOOM</span><button type="button" aria-label="Zoom out" title="Zoom out" disabled={zoom <= 1} onClick={() => adjustZoom(1 / 1.25)}><ZoomOut size={15}/></button><input type="range" min="1" max="8" step="0.25" value={zoom} aria-label="Chart zoom level" onChange={event => setZoom(Number(event.target.value))}/><span className="zoom-percent">{Math.round(zoom * 100)}%</span><button type="button" aria-label="Zoom in" title="Zoom in" disabled={zoom >= 8} onClick={() => adjustZoom(1.25)}><ZoomIn size={15}/></button><button className="zoom-reset" type="button" aria-label="Reset zoom" title="Reset zoom" disabled={zoom === 1} onClick={() => setZoom(1)}><RotateCcw size={13}/><span>Reset</span></button><span className="wheel-hint">Scroll over chart to zoom</span></div>
   </>
 }
 
