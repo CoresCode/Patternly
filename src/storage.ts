@@ -102,6 +102,46 @@ export async function saveExperiment(experiment: SavedExperiment): Promise<void>
   await transact(EXPERIMENTS, 'readwrite', store => store.put(experiment))
 }
 
+export async function deleteSavedExperiment(id: string): Promise<void> {
+  await transact(EXPERIMENTS, 'readwrite', store => store.delete(id))
+}
+
+export async function deleteSavedDataset(id: string): Promise<void> {
+  const db = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([DATASETS, EXPERIMENTS], 'readwrite')
+    transaction.objectStore(DATASETS).delete(id)
+    const index = transaction.objectStore(EXPERIMENTS).index('datasetId')
+    const request = index.openCursor(IDBKeyRange.only(id))
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (cursor) { cursor.delete(); cursor.continue() }
+    }
+    request.onerror = () => reject(request.error ?? new Error('Could not remove the dataset reports.'))
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error ?? new Error('Could not remove this dataset.'))
+    transaction.onabort = () => reject(transaction.error ?? new Error('Removing this dataset was cancelled.'))
+  })
+}
+
+export async function importSavedLibrary(datasets: SavedDataset[], experiments: SavedExperiment[]): Promise<void> {
+  const db = await openDatabase()
+  const idMap = new Map(datasets.map(dataset => [dataset.id, makeId()]))
+  await new Promise<void>((resolve, reject) => {
+    const transaction = db.transaction([DATASETS, EXPERIMENTS], 'readwrite')
+    const datasetStore = transaction.objectStore(DATASETS)
+    const experimentStore = transaction.objectStore(EXPERIMENTS)
+    for (const dataset of datasets) datasetStore.put({ ...dataset, id: idMap.get(dataset.id)! })
+    for (const experiment of experiments) {
+      const datasetId = idMap.get(experiment.datasetId)
+      if (datasetId) experimentStore.put({ ...experiment, id: makeId(), datasetId })
+    }
+    transaction.oncomplete = () => resolve()
+    transaction.onerror = () => reject(transaction.error ?? new Error('Could not restore the Patternly backup.'))
+    transaction.onabort = () => reject(transaction.error ?? new Error('Restoring the Patternly backup was cancelled.'))
+  })
+}
+
 export async function listSavedExperiments(): Promise<SavedExperiment[]> {
   const experiments = await transact<SavedExperiment[]>(EXPERIMENTS, 'readonly', store => store.getAll())
   return experiments.sort((left, right) => right.createdAt - left.createdAt)

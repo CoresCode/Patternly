@@ -1,9 +1,12 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
-import { clusterData, MAX_AGGLOMERATIVE_ROWS, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, MAX_KMEDOIDS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ClusteringAlgorithm, type ParsedDataset } from './data'
-import { getSavedDataset, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, Trash2, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { MAX_AGGLOMERATIVE_ROWS, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, MAX_KMEDOIDS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ClusteringAlgorithm, type ParsedDataset } from './data'
+import { clusterInWorker } from './cluster-client'
+import { deleteSavedDataset, deleteSavedExperiment, getSavedDataset, importSavedLibrary, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
+import { makeWorkspaceBackup, parseWorkspaceBackup, resultCsv } from './export'
 import sampleCsv from './data/mini-flowers.csv?raw'
 import './style.css'
+import './release.css'
 
 const colors = ['#f29d62', '#89a997', '#769bc0', '#d47e82', '#a891c3', '#d5bd67', '#68b9b1']
 
@@ -15,9 +18,9 @@ function algorithmLimit(algorithm: ClusteringAlgorithm): number {
   return { kmeans: MAX_KMEANS_ROWS, dbscan: MAX_DBSCAN_ROWS, agglomerative: MAX_AGGLOMERATIVE_ROWS, kmedoids: MAX_KMEDOIDS_ROWS }[algorithm]
 }
 
-function LibraryPage({ title, description, empty, children }: { title: string; description: string; empty: string; children: React.ReactNode }) {
+function LibraryPage({ title, description, empty, actions, notice, children }: { title: string; description: string; empty: string; actions?: React.ReactNode; notice?: string; children: React.ReactNode }) {
   const items = Array.isArray(children) ? children : [children]
-  return <div className="content library-page"><div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> PATTERNLY LIBRARY</div><h1>{title}</h1><p>{description}</p></div></div><div className="library-list">{items.length ? items : <div className="library-empty"><Database size={22}/><strong>Your library is ready</strong><span>{empty}</span></div>}</div><footer className="footer"><span>Patternly <i/> Saved on this device</span><span>Built for curious minds <Sparkles size={12}/></span></footer></div>
+  return <div className="content library-page"><div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> PATTERNLY LIBRARY</div><h1>{title}</h1><p>{description}</p></div>{actions && <div className="library-actions">{actions}</div>}</div>{notice && <div className="storage-message" role="status">{notice}</div>}<div className="library-list">{items.length ? items : <div className="library-empty"><Database size={22}/><strong>Your library is ready</strong><span>{empty}</span></div>}</div><footer className="footer"><span>Patternly <i/> Saved on this device</span><span>Built for curious minds <Sparkles size={12}/></span></footer></div>
 }
 
 function ClusterLegend({ result }: { result: ClusterResult }) {
@@ -113,6 +116,7 @@ function App() {
   const [savedDatasets, setSavedDatasets] = useState<SavedDataset[]>([])
   const [savedExperiments, setSavedExperiments] = useState<SavedExperiment[]>([])
   const [storageMessage, setStorageMessage] = useState('')
+  const backupInput = useRef<HTMLInputElement>(null)
 
   async function refreshLibrary() {
     try {
@@ -157,8 +161,7 @@ function App() {
     if (!dataset || features.length === 0) return
     setError(''); setBusy(true)
     try {
-      await new Promise(resolve => setTimeout(resolve, 0))
-      const next = clusterData(dataset, algorithm, features, clusterCount, eps, minSamples)
+      const next = await clusterInWorker({ dataset: { info: dataset.info, records: dataset.records }, algorithm, features, clusterCount, eps, minSamples })
       setResult(next); setChartZoom(1); setRuns(previous => [next, ...previous].slice(0, 3))
       if (datasetId) {
         try {
@@ -172,6 +175,65 @@ function App() {
 
   async function loadSample() {
     await selectFile(new File([sampleCsv], 'mini-flowers.csv', { type: 'text/csv' }))
+  }
+
+  function downloadFile(filename: string, content: string, type: string) {
+    const url = URL.createObjectURL(new Blob([content], { type }))
+    const link = document.createElement('a')
+    link.href = url; link.download = filename; link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+  }
+
+  function exportCurrentReport() {
+    if (!dataset || !result) return
+    try {
+      const report = resultCsv(dataset.records, dataset.info.column_info.map(column => column.name), result)
+      const stem = dataset.info.filename.replace(/\.csv$/i, '').replace(/[^a-z0-9_-]+/gi, '-') || 'patternly-data'
+      downloadFile(`${stem}-${result.algorithm}-groups.csv`, report, 'text/csv;charset=utf-8')
+    } catch (err) { setStorageMessage(err instanceof Error ? err.message : 'Could not export this report.') }
+  }
+
+  function exportWorkspace() {
+    try {
+      downloadFile('patternly-workspace-backup.json', JSON.stringify(makeWorkspaceBackup(savedDatasets, savedExperiments)), 'application/json;charset=utf-8')
+      setStorageMessage('Backup downloaded. Keep the JSON file somewhere safe; you can restore it in Patternly on another device.')
+    } catch (err) { setStorageMessage(err instanceof Error ? err.message : 'Could not create the backup.') }
+  }
+
+  async function restoreWorkspace(file: File | undefined) {
+    if (!file) return
+    try {
+      if (file.size > 100 * 1024 * 1024) throw new Error('Patternly backups must be 100 MB or smaller.')
+      const backup = parseWorkspaceBackup(await file.text())
+      for (const item of backup.datasets) {
+        const parsed = parseCsv(item.csvText, item.name)
+        if (parsed.info.rows !== item.rows || parsed.info.columns !== item.columns) throw new Error(`The saved dataset “${item.name}” does not match its backup details.`)
+      }
+      if (!window.confirm(`Restore ${backup.datasets.length} datasets and ${backup.experiments.length} reports into this browser? Existing library items will stay in place.`)) return
+      await importSavedLibrary(backup.datasets, backup.experiments)
+      await refreshLibrary()
+      setStorageMessage(`Restored ${backup.datasets.length} datasets and ${backup.experiments.length} reports. They are now saved on this device.`)
+    } catch (err) { setStorageMessage(err instanceof Error ? err.message : 'Could not restore this backup.') }
+    finally { if (backupInput.current) backupInput.current.value = '' }
+  }
+
+  async function removeDataset(item: SavedDataset) {
+    if (!window.confirm(`Delete “${item.name}” and its ${savedExperiments.filter(run => run.datasetId === item.id).length} saved reports from this browser?`)) return
+    try {
+      await deleteSavedDataset(item.id)
+      if (datasetId === item.id) { setDataset(null); setDatasetId(''); setResult(null) }
+      await refreshLibrary()
+      setStorageMessage(`Deleted “${item.name}” and its saved reports from this browser.`)
+    } catch (err) { setStorageMessage(err instanceof Error ? err.message : 'Could not delete this dataset.') }
+  }
+
+  async function removeExperiment(item: SavedExperiment) {
+    if (!window.confirm(`Delete the ${algorithmName(item.algorithm)} report for “${item.datasetName}”?`)) return
+    try {
+      await deleteSavedExperiment(item.id)
+      await refreshLibrary()
+      setStorageMessage('Experiment report deleted from this browser.')
+    } catch (err) { setStorageMessage(err instanceof Error ? err.message : 'Could not delete this report.') }
   }
 
   const clusterableColumns = dataset?.info.column_info.filter(column => column.kind !== 'text') ?? []
@@ -213,7 +275,7 @@ function App() {
 
     <main className="main-area">
       <header className="topbar"><div className="crumb">Workspace <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button" aria-label="Help"><CircleHelp size={17}/></button><div className="avatar small">P</div></div></header>
-      {page === 'datasets' ? <LibraryPage title="Your datasets" description="Every CSV you add is saved in this browser, with its past clustering reports." empty="Upload a CSV in Studio to start your library.">{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${algorithmName(latest.algorithm)}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Each run keeps its settings, cluster assignments, map, and summary for review." empty="Run clustering in Studio to create your first report.">{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{algorithmName(item.algorithm)}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button></article>)}</LibraryPage> : <div className="content">
+      {page === 'datasets' ? <LibraryPage title="Your datasets" description="Your CSVs and reports are saved in this browser. Use a backup to move them to another device." empty="Upload a CSV in Studio to start your library." notice={storageMessage} actions={<><button className="quiet-button" onClick={exportWorkspace}><ArrowDownToLine size={15}/> Backup library</button><button className="quiet-button" onClick={() => backupInput.current?.click()}><ArrowUpRight size={15}/> Restore backup</button><input ref={backupInput} type="file" accept="application/json,.json" className="visually-hidden" onChange={event => void restoreWorkspace(event.currentTarget.files?.[0])}/></>}>{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${algorithmName(latest.algorithm)}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button><button className="remove-library-item" aria-label={`Delete ${item.name} and its reports`} title="Delete dataset and reports" onClick={() => void removeDataset(item)}><Trash2 size={15}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Reports stay in this browser until you delete them or clear the browser’s site data." empty="Run clustering in Studio to create your first report." notice={storageMessage}>{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{algorithmName(item.algorithm)}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button><button className="remove-library-item" aria-label={`Delete ${item.datasetName} report`} title="Delete report" onClick={() => void removeExperiment(item)}><Trash2 size={15}/></button></article>)}</LibraryPage> : <div className="content">
         <div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> DATA EXPLORATION</div><h1>Find the shape in your data.</h1><p>Bring a dataset, try a clustering method, and see what patterns emerge.</p></div><button className="quiet-button" onClick={() => { setDataset(null); setResult(null); setAxisOverride(null); setChartZoom(1); setRuns([]); setError(''); setChartExpanded(false) }}><Plus size={16}/> New exploration</button></div>
         <div className="layout-grid">
           <section className="left-column">
@@ -222,7 +284,7 @@ function App() {
               <input type="file" accept=".csv,text/csv" onChange={event => { void selectFile(event.target.files?.[0]); event.currentTarget.value = '' }}/><div className="upload-icon"><UploadCloud size={21}/></div><strong>{busy ? 'Reading your dataset...' : 'Drop your CSV here, or browse'}</strong><span>CSV only · up to {MAX_FILE_BYTES / 1024 / 1024} MB · processed in your browser</span><span className="browse-link">Choose a file <ArrowDownToLine size={13}/></span>
             </label> : <div className="dataset-card"><div className="file-icon"><FileSpreadsheet size={18}/></div><div className="dataset-name"><strong>{dataset.info.filename}</strong><span>{dataset.info.rows.toLocaleString()} rows <i/> {dataset.info.columns} columns</span></div><button className="remove-file" onClick={() => {setDataset(null); setResult(null)}} aria-label="Remove dataset"><X size={16}/></button><div className="dataset-stats"><div><span>ROWS</span><strong>{dataset.info.rows.toLocaleString()}</strong></div><div><span>FEATURES</span><strong>{dataset.info.columns}</strong></div><div><span>USABLE</span><strong>{clusterableColumns.length}</strong></div></div></div>}
             {dataset && <div className="preview-card"><div className="card-heading"><div><h3>Quick preview</h3><span>First 12 rows · {dataset.info.column_info.length} columns detected</span></div><span className="text-button">Processed locally <Check size={13}/></span></div><div className="table-wrap"><table><thead><tr>{previewColumns.map(col => <th key={col.name}>{col.name}<small>{col.type}</small></th>)}</tr></thead><tbody>{dataset.info.preview.map((row, index) => <tr key={index}>{previewColumns.map(col => <td key={col.name}>{row[col.name] === '' ? <em>empty</em> : String(row[col.name])}</td>)}</tr>)}</tbody></table></div></div>}
-            {dataset && result && <div className="result-card"><div className="card-heading"><div><h3>{chartType === 'map' ? 'Cluster map' : 'Cluster sizes'}</h3><span>{chartType === 'map' && chart ? `${chart.xName} × ${chart.yName} · ` : ''}{result.labels.length.toLocaleString()} rows · {algorithmName(result.algorithm)}</span></div><div className="visual-actions"><label className="chart-type-select"><span>VIEW</span><select aria-label="Chart visualization" value={chartType} onChange={event => setChartType(event.target.value as 'map' | 'sizes')}><option value="map">Cluster map</option><option value="sizes">Cluster sizes</option></select></label><button className="icon-button expand-button" aria-label="Expand visualization" title="Expand visualization" onClick={() => setChartExpanded(true)}><Maximize2 size={15}/></button><button className="export-button"><ArrowDownToLine size={14}/> Export</button></div></div>
+            {dataset && result && <div className="result-card"><div className="card-heading"><div><h3>{chartType === 'map' ? 'Cluster map' : 'Cluster sizes'}</h3><span>{chartType === 'map' && chart ? `${chart.xName} × ${chart.yName} · ` : ''}{result.labels.length.toLocaleString()} rows · {algorithmName(result.algorithm)}</span></div><div className="visual-actions"><label className="chart-type-select"><span>VIEW</span><select aria-label="Chart visualization" value={chartType} onChange={event => setChartType(event.target.value as 'map' | 'sizes')}><option value="map">Cluster map</option><option value="sizes">Cluster sizes</option></select></label><button className="icon-button expand-button" aria-label="Expand visualization" title="Expand visualization" onClick={() => setChartExpanded(true)}><Maximize2 size={15}/></button><button className="export-button" onClick={exportCurrentReport}><ArrowDownToLine size={14}/> Export CSV</button></div></div>
               {plot()}
               <ClusterLegend result={result}/>
             </div>}

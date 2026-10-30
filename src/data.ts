@@ -168,7 +168,7 @@ export function recommendedFeatures(info: DatasetInfo): string[] {
 
 type EncodedMatrix = { values: number[][]; featureNames: string[]; numericValues: number[][]; numericNames: string[] }
 
-function numericMatrix(dataset: ParsedDataset, features: string[]): EncodedMatrix {
+function numericMatrix(dataset: Pick<ParsedDataset, 'info' | 'records'>, features: string[]): EncodedMatrix {
   if (features.length === 0) throw new Error('Select at least one numeric or categorical feature.')
   const columnsByName = new Map(dataset.info.column_info.map(column => [column.name, column]))
   if (features.some(feature => !columnsByName.has(feature) || columnsByName.get(feature)?.kind === 'text')) {
@@ -235,7 +235,7 @@ function clipNumericTails(values: number[]): number[] {
 }
 
 export function clusterData(
-  dataset: ParsedDataset,
+  dataset: Pick<ParsedDataset, 'info' | 'records'>,
   algorithm: ClusteringAlgorithm,
   features: string[],
   clusterCount: number,
@@ -298,7 +298,7 @@ export function clusterData(
   }
 }
 
-function summarizeClusters(dataset: ParsedDataset, features: string[], labels: number[]): Record<string, string[]> {
+function summarizeClusters(dataset: Pick<ParsedDataset, 'info' | 'records'>, features: string[], labels: number[]): Record<string, string[]> {
   const summaries: Record<string, string[]> = {}
   const groups = new Map<number, number[]>()
   const columns = new Map(dataset.info.column_info.map(column => [column.name, column]))
