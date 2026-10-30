@@ -44,8 +44,12 @@ Clustering runs locally, so method limits help keep the page responsive. Current
 
 React, TypeScript, and Vite. Data parsing, clustering, and chart preparation happen in the browser. Clustering runs in a background browser worker so the page can stay responsive while a method is working.
 
-## Publish on GitHub Pages
+## Deploy to Cloudflare Workers
 
-The included GitHub Actions workflow runs the checks, builds the site for `CoresCode.github.io/Patternly`, and deploys it whenever a commit lands on `main`. In the repository settings, open **Pages** and set the build and deployment source to **GitHub Actions**. The first successful workflow run will publish the site. The app is static and needs no server; each visitor gets a separate local library in their browser.
+Patternly is deployed at [patternly.corescode.workers.dev](https://patternly.corescode.workers.dev) as a Cloudflare Worker with static assets. To publish later changes from this checkout, run `npm run deploy:cloudflare`. For a local production preview, run `npm run preview:cloudflare`. The Worker serves the app at its root URL; each visitor’s datasets and reports stay in that visitor’s browser. Deploying from another machine requires Wrangler authentication with the Cloudflare account.
+
+### Alternative: GitHub Pages
+
+The included GitHub Actions workflow can also deploy the site to GitHub Pages. To use that alternative, set the repository’s **Settings → Pages → Source** to **GitHub Actions**. The Cloudflare Worker remains the primary deployment.
 
 PCA and outlier detection are ideas for a later release; Patternly currently focuses on clustering.

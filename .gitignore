@@ -3,6 +3,8 @@ dist/
 .npm-cache/
 *.tsbuildinfo
 .env
+.dev.vars
+.wrangler/
 
 .tools/
 .npm-cache/
