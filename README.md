@@ -1,36 +1,45 @@
 ﻿# Patternly
 
-Patternly is a browser-based machine learning exploration studio. It reads your files locally, previews the data, runs clustering in your browser, and shows the results on an interactive cluster map.
+Patternly is a small, browser-based workspace for exploring CSV data with clustering. Load a file, choose the columns to use, run a method, and inspect the groups on an interactive chart.
 
-## Start the app
+## Run it locally
 
-From this folder, run:
+You’ll need Node.js and npm installed. From the project folder:
 
 ```powershell
-npm.cmd install
-npm.cmd run dev
+npm install
+npm run dev
 ```
 
-Open the local address Vite prints. Patternly does not need a Python service or a separate API server.
+Open the local address printed by Vite. To make a production build, run `npm run build`. Run the data and clustering checks with `npm test`.
 
-## Supported file format
+## Bring in a dataset
 
-- `.csv` files up to 25 MB
-- A header row and at least two columns are required
-- Comma-separated CSV is standard; tab- and semicolon-separated files are detected too
-- Numeric and low-cardinality categorical columns are usable for clustering; high-cardinality text columns remain available in the preview.
-- Repeated `Item 1`, `Item 2`, … columns are recognized as shopping baskets and encoded as item-presence features.
-- K-Means supports up to 10,000 rows, DBSCAN 2,500, Agglomerative 500, and K-Medoids 300 in the browser
-- Encoded feature sets are limited to 1,500 dimensions
+Patternly currently accepts CSV files up to 25 MB. Files need a header row and at least two columns. Comma-separated files are supported, and tab- or semicolon-separated files are detected as well.
 
-The bundled mini flower sample is included in the frontend build. Clicking it does not make a network request. Uploaded file contents also stay in your browser; Patternly has no backend API.
+Numeric columns and categorical columns with a manageable number of distinct values can be used as features. Long text fields stay available in the preview but aren’t used for clustering. Shopping-basket files with columns such as `Item 1`, `Item 2`, and `Item 3` are treated as item-presence data. The included mini flower sample can be loaded without downloading anything.
 
-## Clustering
+Everything runs in your browser. There is no upload service or API: your file contents stay on your device. Patternly saves datasets and experiment reports in browser storage on that device, so they won’t automatically appear in another browser or computer. Clearing site data will remove them.
 
-Patternly fills missing numeric values with the column median, caps extreme numeric tails at the 2nd/98th percentile for clustering on datasets with at least 100 rows, encodes categories, standardizes selected features, and runs four local clustering methods. K-Means assigns every row to the number of compact groups you choose; DBSCAN finds dense groups and noise; Agglomerative builds a hierarchy and cuts it into your chosen number of groups; K-Medoids represents groups with actual rows. Their browser limits are 10,000, 2,500, 500, and 300 rows respectively. When selected data has at least two numeric columns, the map plots those directly and lets you choose which columns appear on each axis; otherwise it projects the encoded data into two dimensions for display. The chart can switch between a cluster map and group-size bars, focuses on the middle 96% of plot values, and pins extreme values to the edges; hover a dot to see its original values. The map includes a zoom slider, zoom buttons below the plot, and mouse-wheel zoom. The Datasets page saves each uploaded CSV in browser storage, and the Experiments page keeps each run's settings, assignments, and report on that device.
+## Explore clusters
 
-## Tests
+Choose features and a method, then run an experiment. Patternly fills missing numeric values with the column median, limits the effect of extreme numeric values during clustering on larger datasets, encodes categories, and standardizes selected features.
 
-Run `npm.cmd test` to check CSV parsing, categorical and basket encoding, the bundled sample, all four clustering methods, extreme values, and row-limit handling.
+The current methods are:
 
-PCA and outlier detection are planned follow-on features.
+- **K-Means** groups rows around a chosen number of centers.
+- **DBSCAN** finds dense groups and marks rows outside them as noise.
+- **Agglomerative clustering** builds groups by repeatedly joining nearby rows, then cuts the hierarchy to the chosen group count.
+- **K-Medoids** forms groups represented by actual rows from the dataset.
+
+The map shows two selected numeric columns when available. Otherwise, it projects the selected features into two display dimensions. A cluster-size view is also available. Hover over points and group labels for details; zoom and pan to inspect crowded areas. Experiments keep their settings, group assignments, and reports so you can compare runs later.
+
+## Browser limits
+
+Clustering runs locally, so method limits help keep the page responsive. Current maximums are 10,000 rows for K-Means, 2,500 for DBSCAN, 500 for Agglomerative, and 300 for K-Medoids. Encoded datasets are limited to 1,500 features. These are current implementation limits, not fixed limits of the algorithms; faster implementations or moving computation off the main page could raise them later.
+
+## Built with
+
+React, TypeScript, and Vite. Data parsing, clustering, and chart preparation happen in the browser.
+
+PCA and outlier detection are ideas for a later release; Patternly currently focuses on clustering.
