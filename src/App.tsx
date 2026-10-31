@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, ChevronDown, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, Trash2, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, Trash2, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { MAX_AGGLOMERATIVE_ROWS, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, MAX_KMEDOIDS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ClusteringAlgorithm, type ParsedDataset } from './data'
 import { clusterInWorker } from './cluster-client'
 import { deleteSavedDataset, deleteSavedExperiment, getSavedDataset, importSavedLibrary, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
@@ -116,6 +116,7 @@ function App() {
   const [savedDatasets, setSavedDatasets] = useState<SavedDataset[]>([])
   const [savedExperiments, setSavedExperiments] = useState<SavedExperiment[]>([])
   const [storageMessage, setStorageMessage] = useState('')
+  const [helpOpen, setHelpOpen] = useState(false)
   const backupInput = useRef<HTMLInputElement>(null)
 
   async function refreshLibrary() {
@@ -126,6 +127,15 @@ function App() {
   }
 
   useEffect(() => { void refreshLibrary() }, [])
+
+  useEffect(() => {
+    if (!helpOpen && !chartExpanded) return
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') { setHelpOpen(false); setChartExpanded(false) }
+    }
+    window.addEventListener('keydown', closeOnEscape)
+    return () => window.removeEventListener('keydown', closeOnEscape)
+  }, [helpOpen, chartExpanded])
 
   async function openDataset(id: string) {
     try {
@@ -264,17 +274,17 @@ function App() {
   return <div className="app-shell">
     <aside className="sidebar">
       <a className="brand" href="#"><span className="brand-mark"><Activity size={20} strokeWidth={2.3}/></span><span>patternly</span></a>
-      <div className="workspace-label">WORKSPACE <ChevronDown size={13}/></div>
+      <div className="workspace-label">WORKSPACE</div>
       <button className={`nav-item ${page === 'studio' ? 'active' : ''}`} onClick={() => setPage('studio')}><Layers3 size={17}/> Studio {page === 'studio' && <span className="nav-dot"/>}</button>
       <button className={`nav-item ${page === 'datasets' ? 'active' : ''}`} onClick={() => setPage('datasets')}><Database size={17}/> Datasets</button>
       <button className={`nav-item ${page === 'experiments' ? 'active' : ''}`} onClick={() => setPage('experiments')}><FlaskConical size={17}/> Experiments</button>
       <div className="side-divider"/><div className="side-caption">RECENT EXPERIMENTS</div>
       {savedExperiments.length ? savedExperiments.slice(0, 5).map((item, index) => <button className="recent" key={item.id} onClick={() => void openExperiment(item)}><span className="recent-dot" style={{background: colors[index % colors.length]}}/>{algorithmName(item.algorithm)} <span>{item.result.cluster_count} groups</span></button>) : <div className="empty-recent">Your saved experiments<br/>will appear here.</div>}
-      <div className="sidebar-bottom"><button className="nav-item"><CircleHelp size={17}/> Help & guides</button><div className="profile"><div className="avatar">P</div><div><strong>Personal workspace</strong><small>Free plan</small></div><ChevronDown size={15}/></div></div>
+      <div className="sidebar-bottom"><button className="nav-item" onClick={() => setHelpOpen(true)}><CircleHelp size={17}/> Help & guides</button></div>
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="crumb">Workspace <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button" aria-label="Help"><CircleHelp size={17}/></button><div className="avatar small">P</div></div></header>
+      <header className="topbar"><div className="crumb">Patternly <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button" aria-label="Help and guides" title="Help and guides" onClick={() => setHelpOpen(true)}><CircleHelp size={17}/></button></div></header>
       {page === 'datasets' ? <LibraryPage title="Your datasets" description="Your CSVs and reports are saved in this browser. Use a backup to move them to another device." empty="Upload a CSV in Studio to start your library." notice={storageMessage} actions={<><button className="quiet-button" onClick={exportWorkspace}><ArrowDownToLine size={15}/> Backup library</button><button className="quiet-button" onClick={() => backupInput.current?.click()}><ArrowUpRight size={15}/> Restore backup</button><input ref={backupInput} type="file" accept="application/json,.json" className="visually-hidden" onChange={event => void restoreWorkspace(event.currentTarget.files?.[0])}/></>}>{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${algorithmName(latest.algorithm)}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button><button className="remove-library-item" aria-label={`Delete ${item.name} and its reports`} title="Delete dataset and reports" onClick={() => void removeDataset(item)}><Trash2 size={15}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Reports stay in this browser until you delete them or clear the browser’s site data." empty="Run clustering in Studio to create your first report." notice={storageMessage}>{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{algorithmName(item.algorithm)}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button><button className="remove-library-item" aria-label={`Delete ${item.datasetName} report`} title="Delete report" onClick={() => void removeExperiment(item)}><Trash2 size={15}/></button></article>)}</LibraryPage> : <div className="content">
         <div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> DATA EXPLORATION</div><h1>Find the shape in your data.</h1><p>Bring a dataset, try a clustering method, and see what patterns emerge.</p></div><button className="quiet-button" onClick={() => { setDataset(null); setResult(null); setAxisOverride(null); setChartZoom(1); setRuns([]); setError(''); setChartExpanded(false) }}><Plus size={16}/> New exploration</button></div>
         <div className="layout-grid">
@@ -300,7 +310,7 @@ function App() {
             </div>
             {error && <div className="error-banner">{error}</div>}
             <div className="insight-card"><div className="insight-icon"><Sparkles size={16}/></div><div><strong>A good place to start</strong><p>Patternly scales numeric features, caps extreme values so a few outliers do not dominate the groups, and encodes categories locally. Detected item columns are treated as shopping baskets.</p></div></div>
-            {runs.length > 1 && <div className="compare-card"><div className="compare-heading"><div><h3>Compare runs</h3><span>Recent experiments in this session</span></div><button className="text-button">Clear</button></div>{runs.map((item,index)=><div className="compare-row" key={index}><span className="compare-color" style={{background:colors[index]}}/><strong>{algorithmName(item.algorithm)}</strong><span>{item.cluster_count} clusters</span><b>{item.labels.length} rows</b></div>)}</div>}
+            {runs.length > 1 && <div className="compare-card"><div className="compare-heading"><div><h3>Recent runs</h3><span>Select a run to view its chart</span></div><button className="text-button" onClick={() => setRuns([])}>Clear</button></div>{runs.map((item,index)=><button className={`compare-row ${result === item ? 'selected' : ''}`} key={index} onClick={() => { setResult(item); setAlgorithm(item.algorithm); setFeatures(item.features); setChartZoom(1); setAxisOverride(null) }} title="Show this run's chart"><span className="compare-color" style={{background:colors[index]}}/><strong>{algorithmName(item.algorithm)}</strong><span>{item.cluster_count} clusters</span><b>{item.labels.length.toLocaleString()} rows</b></button>)}</div>}
             <div className="coming-soon"><div><span className="coming-icon">P</span><span><strong>More ways to explore</strong><small>PCA & outlier detection are on the way</small></span></div><span className="soon-pill">COMING SOON</span></div>
           </section>
         </div>
@@ -309,6 +319,7 @@ function App() {
       </div>}
     </main>
     {chartExpanded && result && <div className="modal-backdrop" onMouseDown={() => setChartExpanded(false)}><section className="chart-modal" role="dialog" aria-modal="true" aria-labelledby="expanded-chart-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><h2 id="expanded-chart-title">{chartType === 'map' ? 'Cluster map' : 'Cluster sizes'}</h2><span>{chartType === 'map' && chart ? `${chart.xName} vs ${chart.yName} · ` : ''}{result.labels.length.toLocaleString()} rows · {algorithmName(result.algorithm)}</span></div><button className="icon-button" aria-label="Close expanded visualization" onClick={() => setChartExpanded(false)}><X size={18}/></button></div>{plot(true)}<ClusterLegend result={result}/></section></div>}
+    {helpOpen && <div className="modal-backdrop" onMouseDown={() => setHelpOpen(false)}><section className="help-modal" role="dialog" aria-modal="true" aria-labelledby="help-title" onMouseDown={event => event.stopPropagation()}><div className="modal-heading"><div><h2 id="help-title">A quick guide to Patternly</h2><span>Your data stays in this browser.</span></div><button className="icon-button" aria-label="Close help" onClick={() => setHelpOpen(false)}><X size={18}/></button></div><div className="help-content"><section><span className="help-step">01</span><div><strong>Choose a CSV</strong><p>Drop a CSV into Studio or use “Try our mini flower dataset.” Patternly reads it on your device and saves it to your local Datasets library.</p></div></section><section><span className="help-step">02</span><div><strong>Choose columns and a method</strong><p>Select numeric or categorical features. K-Means and Agglomerative ask for a group count. DBSCAN uses neighborhood radius and minimum points to find dense groups and noise.</p></div></section><section><span className="help-step">03</span><div><strong>Read and save the result</strong><p>Each dot represents a row; colors mark the groups. Hover over dots or legend labels for details. Switch between the cluster map and group sizes, adjust axes, or zoom in. Completed runs appear in Experiments when the dataset is saved.</p></div></section><section><span className="help-step"><Database size={15}/></span><div><strong>Keep or move your work</strong><p>Datasets and reports stay on this device. Use Datasets → Backup library to download them, then Restore backup on another device. Clearing browser data removes the local library.</p></div></section></div><div className="help-footer"><button className="quiet-button" onClick={() => { setHelpOpen(false); setPage('datasets') }}>Open Datasets</button><button className="run-button help-done" onClick={() => setHelpOpen(false)}>Got it</button></div></section></div>}
   </div>
 }
 
