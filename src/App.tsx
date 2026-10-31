@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Play, Plus, RotateCcw, Sparkles, Trash2, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
+import { Activity, ArrowDownToLine, ArrowUpRight, BarChart3, Check, CircleHelp, Database, FileSpreadsheet, FlaskConical, Info, Layers3, LoaderCircle, Maximize2, Moon, Play, Plus, RotateCcw, Sparkles, Sun, Trash2, UploadCloud, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { MAX_AGGLOMERATIVE_ROWS, MAX_DBSCAN_ROWS, MAX_FILE_BYTES, MAX_KMEANS_ROWS, MAX_KMEDOIDS_ROWS, parseCsv, readCsvFile, recommendedFeatures, type ClusterResult, type ClusteringAlgorithm, type ParsedDataset } from './data'
 import { clusterInWorker } from './cluster-client'
 import { deleteSavedDataset, deleteSavedExperiment, getSavedDataset, importSavedLibrary, listSavedDatasets, listSavedExperiments, makeSavedDataset, makeSavedExperiment, saveDataset, saveExperiment, type SavedDataset, type SavedExperiment } from './storage'
@@ -117,6 +117,9 @@ function App() {
   const [savedExperiments, setSavedExperiments] = useState<SavedExperiment[]>([])
   const [storageMessage, setStorageMessage] = useState('')
   const [helpOpen, setHelpOpen] = useState(false)
+  const [darkMode, setDarkMode] = useState(() => {
+    try { return localStorage.getItem('patternly-theme') === 'dark' } catch { return false }
+  })
   const backupInput = useRef<HTMLInputElement>(null)
 
   async function refreshLibrary() {
@@ -127,6 +130,10 @@ function App() {
   }
 
   useEffect(() => { void refreshLibrary() }, [])
+
+  useEffect(() => {
+    try { localStorage.setItem('patternly-theme', darkMode ? 'dark' : 'light') } catch { /* Theme still applies for this session. */ }
+  }, [darkMode])
 
   useEffect(() => {
     if (!helpOpen && !chartExpanded) return
@@ -271,7 +278,7 @@ function App() {
 
   function toggleFeature(name: string) { setFeatures(current => current.includes(name) ? current.filter(item => item !== name) : [...current, name]) }
 
-  return <div className="app-shell">
+  return <div className="app-shell" data-theme={darkMode ? 'dark' : 'light'}>
     <aside className="sidebar">
       <a className="brand" href="#"><span className="brand-mark"><Activity size={20} strokeWidth={2.3}/></span><span>patternly</span></a>
       <div className="workspace-label">WORKSPACE</div>
@@ -284,7 +291,7 @@ function App() {
     </aside>
 
     <main className="main-area">
-      <header className="topbar"><div className="crumb">Patternly <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button" aria-label="Help and guides" title="Help and guides" onClick={() => setHelpOpen(true)}><CircleHelp size={17}/></button></div></header>
+      <header className="topbar"><div className="crumb">Patternly <span>/</span> <strong>{page === 'studio' ? (dataset?.info.filename ?? 'Untitled exploration') : page === 'datasets' ? 'Datasets' : 'Experiments'}</strong></div><div className="top-actions"><span className="autosave"><span/> Saved on this device</span><button className="icon-button theme-toggle" aria-label={darkMode ? 'Switch to light mode' : 'Switch to dark mode'} title={darkMode ? 'Switch to light mode' : 'Switch to dark mode'} aria-pressed={darkMode} onClick={() => setDarkMode(current => !current)}>{darkMode ? <Sun size={17}/> : <Moon size={17}/>}</button><button className="icon-button" aria-label="Help and guides" title="Help and guides" onClick={() => setHelpOpen(true)}><CircleHelp size={17}/></button></div></header>
       {page === 'datasets' ? <LibraryPage title="Your datasets" description="Your CSVs and reports are saved in this browser. Use a backup to move them to another device." empty="Upload a CSV in Studio to start your library." notice={storageMessage} actions={<><button className="quiet-button" onClick={exportWorkspace}><ArrowDownToLine size={15}/> Backup library</button><button className="quiet-button" onClick={() => backupInput.current?.click()}><ArrowUpRight size={15}/> Restore backup</button><input ref={backupInput} type="file" accept="application/json,.json" className="visually-hidden" onChange={event => void restoreWorkspace(event.currentTarget.files?.[0])}/></>}>{savedDatasets.map(item => { const reports = savedExperiments.filter(run => run.datasetId === item.id); const latest = reports[0]; return <article className="library-card" key={item.id}><div className="library-icon"><FileSpreadsheet size={18}/></div><div className="library-main"><strong>{item.name}</strong><span>{item.rows.toLocaleString()} rows · {item.columns} columns · {item.clusterableColumns} usable features</span><small>Added {new Date(item.uploadedAt).toLocaleString()} · {reports.length} saved {reports.length === 1 ? 'report' : 'reports'}{latest ? ` · Latest: ${algorithmName(latest.algorithm)}, ${latest.result.cluster_count} groups` : ''}</small></div><button className="quiet-button" onClick={() => void openDataset(item.id)}>Open in Studio <ArrowUpRight size={14}/></button><button className="remove-library-item" aria-label={`Delete ${item.name} and its reports`} title="Delete dataset and reports" onClick={() => void removeDataset(item)}><Trash2 size={15}/></button></article>})}</LibraryPage> : page === 'experiments' ? <LibraryPage title="Saved experiments" description="Reports stay in this browser until you delete them or clear the browser’s site data." empty="Run clustering in Studio to create your first report." notice={storageMessage}>{savedExperiments.map(item => <article className="library-card" key={item.id}><div className="library-icon experiment"><FlaskConical size={18}/></div><div className="library-main"><strong>{item.datasetName} <span className="report-method">{algorithmName(item.algorithm)}</span></strong><span>{new Date(item.createdAt).toLocaleString()} · {item.features.join(', ')}</span><small>{item.result.labels.length.toLocaleString()} rows · {item.result.cluster_count} groups · {item.result.noise_count} noise points</small></div><button className="quiet-button" onClick={() => void openExperiment(item)}>View report <ArrowUpRight size={14}/></button><button className="remove-library-item" aria-label={`Delete ${item.datasetName} report`} title="Delete report" onClick={() => void removeExperiment(item)}><Trash2 size={15}/></button></article>)}</LibraryPage> : <div className="content">
         <div className="page-heading"><div><div className="eyebrow"><Sparkles size={13}/> DATA EXPLORATION</div><h1>Find the shape in your data.</h1><p>Bring a dataset, try a clustering method, and see what patterns emerge.</p></div><button className="quiet-button" onClick={() => { setDataset(null); setResult(null); setAxisOverride(null); setChartZoom(1); setRuns([]); setError(''); setChartExpanded(false) }}><Plus size={16}/> New exploration</button></div>
         <div className="layout-grid">
