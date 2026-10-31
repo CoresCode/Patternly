@@ -48,8 +48,6 @@ React, TypeScript, and Vite. Data parsing, clustering, and chart preparation hap
 
 Patternly is deployed at [patternly.corescode.workers.dev](https://patternly.corescode.workers.dev) as a Cloudflare Worker with static assets. To publish later changes from this checkout, run `npm run deploy:cloudflare`. For a local production preview, run `npm run preview:cloudflare`. The Worker serves the app at its root URL; each visitor’s datasets and reports stay in that visitor’s browser. Deploying from another machine requires Wrangler authentication with the Cloudflare account.
 
-### Alternative: GitHub Pages
-
-The included GitHub Actions workflow can also deploy the site to GitHub Pages. To use that alternative, set the repository’s **Settings → Pages → Source** to **GitHub Actions**. The Cloudflare Worker remains the primary deployment.
+GitHub Actions runs the tests and checks a production build on each push. Publishing to Cloudflare is a separate step and currently requires `npm run deploy:cloudflare` from an authenticated checkout.
 
 PCA and outlier detection are ideas for a later release; Patternly currently focuses on clustering.
